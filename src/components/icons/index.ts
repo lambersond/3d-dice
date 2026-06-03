@@ -1,0 +1,7 @@
+export { D4Icon } from './d4'
+export { D6Icon } from './d6'
+export { D8Icon } from './d8'
+export { D10Icon } from './d10'
+export { D12Icon } from './d12'
+export { D20Icon } from './d20'
+export { MoreVertIcon } from './more-vert'

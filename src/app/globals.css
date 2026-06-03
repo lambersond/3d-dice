@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@plugin '@tailwindcss/typography';
+@plugin 'tailwind-scrollbar' {
+    nocompatible: true;
+    preferredStrategy: 'pseudoelements';
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Background colors  */
+  --color-page: #ffffff;
+  --color-paper: #ffffff;
+  --color-card: #f5f5f5;
+  --color-appbar: #fffff8;
+
+  /* Primary colors */
+  --color-primary: #3e79ff;
+  --color-secondary: #ff4968;
+  --color-tertiary: #f0f0f0;
+  --color-border-light: #e4e4e7;
+  --color-border-dark: #a1a1aa;
+
+  --color-hover: #0000003F;
+
+  /* Status colors */
+  --color-info: #0084d1;
+  --color-success: #00c950;
+  --color-warning: #e17100;
+  --color-danger: #fb2c36;
+
+  /* Text colors */
+  --color-text-primary: #000000;
+  --color-text-secondary: #949494;
+  --color-text-tertiary: #a1a1a1;
+
+  --color-ai-bg: #fffbeb;
+  --color-ai-border: #fde68a;
+  --color-ai-label: #92400e;
+  --color-ai-checkbox: #d97706;
+
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-card-hover: 0 8px 24px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06);
+
+  --animate-fade-in: fade-in 400ms ease-out;
+}
+
+.dark {
+  /* Background colors */
+  --color-page:   #0b1120;   /* near-black with cool tint   */
+  --color-paper:  #0e1418;   /* slightly lifted surface     */
+  --color-card:   #16202e;   /* card surface                */
+  --color-appbar: #0f172a;   /* dark top bar                */
+
+  /* Primary colors */
+  --color-primary:   oklch(62%  0.220 264);   /* vivid blue, lightened for contrast  */
+  --color-secondary: oklch(68%  0.220  16);   /* vivid orange, lightened             */
+  --color-tertiary:      oklch(22%  0.015 255);   /* inverted (was very light)           */
+  --color-border-light:  oklch(30%  0.015 286);   /* subtle border on dark bg            */
+  --color-border-dark:   oklch(46%  0.025 256);   /* stronger border                     */
+
+  --color-hover: rgba(255, 255, 255, 0.08);
+
+  /* Status colors — already mid-tone, slight tweak for dark-bg legibility */
+  --color-info:    oklch(62%  0.155 242);
+  --color-success: oklch(74%  0.215 150);
+  --color-warning: oklch(70%  0.172  58);
+  --color-danger:  oklch(65.771% 0.22859 24.798 / 0.735);
+
+  /* Text colors */
+  --color-text-primary:   oklch(94% 0 0);   /* near-white                  */
+  --color-text-secondary: oklch(64% 0 0);   /* mid-gray, readable on dark  */
+  --color-text-tertiary:  oklch(52% 0 0);   /* muted                       */
+
+  /* AI highlight — warm amber shifted to dark */
+  --color-ai-bg: hsla(43, 96%, 56%, 0.06);
+  --color-ai-border: rgba(251,191,36,0.18);
+  --color-ai-label: #fbbf24;
+  --color-ai-check-border: #d97706;
+
+  /* Shadows — more prominent on dark backgrounds */
+  --shadow-card:       0 1px 3px rgba(0, 0, 0, 0.30), 0 1px 2px rgba(0, 0, 0, 0.20);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.50), 0 2px 6px rgba(0, 0, 0, 0.30);
+}
+
+body {
+  color: var(--color-text-primary);
+  background: var(--color-page);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@keyframes dice-roll {
+  from {
+    transform: translate(var(--dice-start-x), var(--dice-start-y)) rotate(0deg);
+  }
+  to {
+    transform: translate(var(--dice-end-x), var(--dice-end-y))
+      rotate(var(--dice-rot));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-dice-bg] {
+    display: none;
+  }
+}
