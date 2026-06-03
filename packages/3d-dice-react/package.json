@@ -1,6 +1,6 @@
 {
   "name": "@lambersond/3d-dice-react",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "React hooks and providers for @lambersond/3d-dice-core.",
   "license": "MIT",
   "type": "module",

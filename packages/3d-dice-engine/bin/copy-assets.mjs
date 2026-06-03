@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-// Assets ship in the package at <pkg>/public/3d-dice (see the "files" field).
 const SOURCE = join(HERE, '..', 'public', '3d-dice')
 const DEFAULT_TARGET = join('public', '3d-dice')
 
@@ -22,8 +21,6 @@ The default pairs with @lambersond/3d-dice-core's default assetPath of "/3d-dice
 If you copy assets elsewhere, pass a matching assetPath to the DiceRenderer.`
 
 function parseArgs(argv) {
-  // Drop the optional "copy-assets" sub-command token and any flags so a bare
-  // positional is treated as the target directory.
   const args = argv.slice(2).filter(a => a !== 'copy-assets')
   if (args.includes('-h') || args.includes('--help')) return { help: true }
   return { target: args.find(a => !a.startsWith('-')) ?? DEFAULT_TARGET }
