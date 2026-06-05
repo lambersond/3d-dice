@@ -1,17 +1,17 @@
 {
   "name": "@lambersond/3d-dice-engine",
-  "version": "0.1.0",
-  "description": "Vendored fork of @3d-dice/dice-box-threejs — a three.js + cannon-es 3D dice engine. Consumed behind @lambersond/3d-dice-core's DiceRenderer.",
+  "version": "0.1.1",
+  "description": "Vendored fork of @3d-dice/dice-box-threejs: a three.js + cannon-es 3D dice engine. Consumed behind @lambersond/3d-dice-core's DiceRenderer.",
   "license": "MIT",
   "type": "module",
-  "main": "./src/index.ts",
-  "module": "./src/index.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
   "types": "./types/index.d.ts",
   "exports": {
     ".": {
       "types": "./types/index.d.ts",
-      "import": "./src/index.ts",
-      "default": "./src/index.ts"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./public/*": "./public/*"
   },
@@ -20,10 +20,16 @@
   },
   "files": [
     "bin",
-    "src",
+    "dist",
     "types",
     "public"
   ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
   "dependencies": {
     "cannon-es": "^0.20.0",
     "three": "^0.184.0"

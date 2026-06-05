@@ -7,9 +7,10 @@
   ],
   "scripts": {
     "copy:dice-assets": "node packages/3d-dice-engine/bin/copy-assets.mjs public/3d-dice",
-    "predev": "npm run copy:dice-assets",
+    "build:packages": "npm run build -w @lambersond/3d-dice-engine -w @lambersond/3d-dice-core -w @lambersond/3d-dice-react",
+    "predev": "npm run build:packages && npm run copy:dice-assets",
     "dev": "next dev",
-    "prebuild": "npm run copy:dice-assets",
+    "prebuild": "npm run build:packages && npm run copy:dice-assets",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
