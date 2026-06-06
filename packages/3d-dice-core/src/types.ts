@@ -23,15 +23,11 @@ export type RollTheme = {
   customColor?: string
 }
 
-/** How a throw's dice leave the table once their dwell elapses. */
 export type RemovalStyle = 'shrink' | 'fade'
 
-/** Per-throw removal options; gaps fall back to the engine's defaults. */
 export type RemovalOptions = {
   style?: RemovalStyle
-  /** Rest time before the exit animation starts, ms (default 1000). */
   dwellMs?: number
-  /** Exit animation duration, ms (default 450). */
   durationMs?: number
 }
 
@@ -81,12 +77,6 @@ export type TrayAction =
 
 export type DiceRendererConfig = {
   containerId?: string
-  /**
-   * Base URL the renderer fetches textures & sounds from at runtime, e.g.
-   * `assetPath + 'textures/wood.webp'`. Defaults to `/3d-dice/`, matching the
-   * folder produced by `npx @lambersond/3d-dice-engine copy-assets`. Override
-   * if you serve the assets from a different path.
-   */
   assetPath?: string
   sounds?: boolean
   surface?: string

@@ -30,14 +30,15 @@ export class DiceColors {
   }
 
   loadImage(src: string): Promise<any> {
+    const url = this.assetPath + src
     return new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = () => resolve(img)
       img.crossOrigin = 'anonymous'
-      img.src = this.assetPath + src
-      img.onerror = error => reject(error)
-    }).catch(() => {
-      console.error('Unable to load image texture')
+      img.src = url
+      img.onerror = () => reject(new Error(`Image load failed: ${url}`))
+    }).catch(error => {
+      console.error(`[dice-engine] Unable to load image texture: ${url}`, error)
     })
   }
 

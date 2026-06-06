@@ -1,9 +1,7 @@
 export class DiceNotation {
-  // Parser output is assembled dynamically; members stay loose.
   [key: string]: any
 
   constructor(notation: any) {
-    // the server may send a plain notation object (no methods) — re-read it
     if (typeof notation === 'object') {
       notation = notation.notation
     }
@@ -168,7 +166,7 @@ export class DiceNotation {
     funcargs: any = '',
     operator = '+',
   ) {
-    amount = Math.abs(parseInt(amount || 1))
+    amount = Math.abs(Number.parseInt(amount || 1))
 
     // update a previous set if these match — also combines duplicates
     const setkey = `${operator}${type}${groupID}${groupLevel}${funcname}${funcargs}`
@@ -189,10 +187,10 @@ export class DiceNotation {
       if (funcargs) setentry.args = funcargs
       if (operator) setentry.op = operator
 
-      if (!update) {
-        this.setkeys[setkey] = this.set.push(setentry)
-      } else {
+      if (update) {
         this.set[this.setkeys[setkey] - 1] = setentry
+      } else {
+        this.setkeys[setkey] = this.set.push(setentry)
       }
     }
 

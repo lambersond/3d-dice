@@ -1,8 +1,28 @@
 import type { DiceRendererConfig, RemovalOptions } from './types'
 
 const DEFAULT_CONTAINER_ID = 'dice-canvas-threejs'
+const INIT_TIMEOUT_MS = 15_000
 
-/** Pulls the per-die `value`s out of the engine's settle result, in order. */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${label} timed out after ${ms}ms`)),
+        ms,
+      ),
+    ),
+  ])
+}
+
+function userAgent(): string {
+  return typeof navigator === 'undefined' ? 'n/a' : navigator.userAgent
+}
+
 function landedValues(settled: unknown): number[] {
   if (!Array.isArray(settled)) return []
   return settled
@@ -41,9 +61,6 @@ export class DiceRenderer {
   private box: DiceBoxInstance | undefined
   private contextLost = false
   private building = false
-  // serializes only the SPAWN of each throw (resolved via the engine's
-  // `onSpawned`), so concurrent rolls coalesce into one continuous tumble
-  // rather than waiting for each to settle
   private spawnChain: Promise<void> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
   private visibilityBound = false
@@ -75,13 +92,6 @@ export class DiceRenderer {
     await box.updateConfig(config)
   }
 
-  /**
-   * Throws `notation` and resolves with the face values the dice landed on, in
-   * notation order. For deterministic notation (`...@values`) these are just the
-   * forced values (callers usually ignore them); for bare notation they're the
-   * physics-determined landings — the source of truth for a non-deterministic
-   * roll (see `executeNonDetRoll`). Empty if the renderer isn't ready.
-   */
   async roll(
     notation: string,
     options?: { theme?: Record<string, unknown>; removal?: RemovalOptions },
@@ -92,10 +102,6 @@ export class DiceRenderer {
     const container = this.getContainer()
     if (container) container.style.opacity = '1'
 
-    // Wait only until the previous throw has SPAWNED (not settled), so this
-    // throw can join the live tumble. The chain serializes spawns so the
-    // engine's "join vs. start fresh" check (does the table have dice?) is
-    // race-free for concurrent callers.
     const prevSpawn = this.spawnChain
     let releaseSpawn!: () => void
     this.spawnChain = new Promise<void>(resolve => {
@@ -108,11 +114,6 @@ export class DiceRenderer {
       return []
     }
 
-    // Every throw joins the live table — the engine adds into the running world
-    // (or starts fresh when empty), and each throw's dice leave on their own
-    // schedule, so a settled roll can clear out even as new dice arrive. The
-    // per-roll theme + removal are bound to this call; the container is hidden
-    // via the onEmpty callback once the table fully drains (see buildBoxConfig).
     const settled = box.roll(notation, {
       theme: options?.theme,
       removal: options?.removal,
@@ -122,9 +123,6 @@ export class DiceRenderer {
     try {
       return landedValues(await settled)
     } finally {
-      // safety net: the engine releases the spawn chain early via onSpawned, but
-      // if it never fires, releasing here (resolve is idempotent) on settle —
-      // success or failure — still prevents a stuck chain.
       releaseSpawn()
     }
   }
@@ -172,8 +170,13 @@ export class DiceRenderer {
       const container = this.ensureContainer()
       const ready = await this.waitForDimensions(container)
       if (!ready) {
-        console.warn(
-          '[dice] Container has zero dimensions; will retry on resume',
+        console.error(
+          '[dice] Container has zero dimensions; renderer not built (retries when visible).',
+          {
+            width: container.clientWidth,
+            height: container.clientHeight,
+            userAgent: userAgent(),
+          },
         )
         return
       }
@@ -182,13 +185,19 @@ export class DiceRenderer {
         `#${this.containerId}`,
         this.buildBoxConfig(),
       ) as unknown as DiceBoxInstance
-      await box.initialize()
+      await withTimeout(box.initialize(), INIT_TIMEOUT_MS, 'DiceBox.initialize')
       this.box = box
       this.contextLost = false
       this.attachContextLossHandlers(box)
       this.notify()
     } catch (error) {
-      console.error('[dice] Failed to initialize DiceBox:', error)
+      const el = this.getContainer()
+      console.error('[dice] Failed to initialize DiceBox:', error, {
+        userAgent: userAgent(),
+        assetPath: this.config.assetPath ?? '/3d-dice/',
+        width: el?.clientWidth,
+        height: el?.clientHeight,
+      })
     } finally {
       this.building = false
     }
@@ -207,8 +216,6 @@ export class DiceRenderer {
       gravity_multiplier: c.gravityMultiplier ?? 400,
       light_intensity: c.lightIntensity ?? 0.8,
       strength: c.strength ?? 1,
-      // engine fires this once the table empties via timed removal; hide the
-      // overlay so it stops intercepting nothing-in-particular until next roll
       onEmpty: () => {
         const container = this.getContainer()
         if (container) container.style.opacity = '0'

@@ -25,31 +25,21 @@ interface DiceFactoryOptions {
 
 type MaterialKey = keyof typeof MATERIALTYPES
 
-/** A 2D context paired with its bump-map context — both drawn in lockstep. */
 interface DrawContexts {
   ctx: CanvasRenderingContext2D
   bump: CanvasRenderingContext2D
   canvas: HTMLCanvasElement
 }
 
-/** Resolved colours for one face's text. */
 interface FaceColors {
   fore: string
   outline: string
   back: string
 }
 
-/** A face's appearance inputs: its texture plus its three text colours. */
 interface FaceStyle extends FaceColors {
   texture: DiceTexture | string
 }
-
-// ---------------------------------------------------------------------------
-// Per-die value helpers
-//
-// These are attached to each mesh and invoked with the mesh as `this`, so they
-// live as free functions typed against `DiceMesh` rather than class methods.
-// ---------------------------------------------------------------------------
 
 function getFaceValue(this: DiceMesh): FaceValue {
   const reason = this.resultReason
@@ -62,8 +52,6 @@ function getFaceValue(this: DiceMesh): FaceValue {
     const face = this.geometry.groups[i]
     if (face.materialIndex === 0) continue
 
-    // Each group consists of 3 vertices of 3 elements (x, y, z) so the
-    // offset between faces in the Float32BufferAttribute is 9
     const startVertex = i * 9
     const normal = new THREE.Vector3(
       normals[startVertex],
@@ -153,7 +141,6 @@ class DiceFactory {
   dice_texture: TextureValue = ''
   dice_material: string | string[] = ''
 
-  // resolved (single) values chosen per roll from the lists above
   dice_color_rand = ''
   label_color_rand = ''
   label_outline_rand = ''
@@ -186,7 +173,6 @@ class DiceFactory {
     this.materials_cache = {}
   }
 
-  // returns a dicemesh (THREE.Mesh) object
   create(type: string): DiceMesh | null {
     const diceobj = this.get(type)
     if (!diceobj) return null
@@ -243,9 +229,7 @@ class DiceFactory {
     return this.geometries[type]
   }
 
-  scaleGeometry(): void {
-    // no-op: geometry is recreated per roll; kept for updateConfig() callers
-  }
+  scaleGeometry(): void {}
 
   createMaterials(
     diceobj: DicePresetLike,
@@ -268,7 +252,6 @@ class DiceFactory {
     return materials
   }
 
-  /** Builds the material for one face (face 0 is the die's edge). */
   private buildFaceMaterial(
     diceobj: DicePresetLike,
     labels: DiceLabel[],
@@ -306,7 +289,6 @@ class DiceFactory {
     return mat
   }
 
-  /** A fresh face material honouring the colorset's material choice. */
   private baseMaterial(): DiceMaterial {
     if (this.dice_material !== 'none') {
       const mat = new THREE.MeshStandardMaterial(
@@ -318,7 +300,6 @@ class DiceFactory {
     return new THREE.MeshPhongMaterial(this.material_options)
   }
 
-  /** The edge texture, skipping a fully-opaque texture so the edge stays plain. */
   private edgeTexture(): DiceTexture {
     const rand = this.dice_texture_rand
     if (typeof rand !== 'string' && rand.composite !== 'source-over') return rand
@@ -332,10 +313,6 @@ class DiceFactory {
     return 0.75
   }
 
-  /**
-   * Renders one face to a canvas (background, optional texture, and the face's
-   * label/glyphs) and returns the composite + bump textures, caching the result.
-   */
   createTextMaterial(
     diceobj: DicePresetLike,
     labels: DiceLabel[],
@@ -383,14 +360,12 @@ class DiceFactory {
     canvas.width = canvas.height = ts
     canvasBump.width = canvasBump.height = ts
 
-    // create color
     context.fillStyle = colors.back
     context.fillRect(0, 0, canvas.width, canvas.height)
 
     contextBump.fillStyle = '#FFFFFF'
     contextBump.fillRect(0, 0, canvasBump.width, canvasBump.height)
 
-    // create underlying texture
     if (tex.texture && tex.name !== '' && tex.name !== 'none') {
       context.globalCompositeOperation =
         (tex.composite as GlobalCompositeOperation) || 'source-over'
@@ -405,7 +380,6 @@ class DiceFactory {
       context.globalCompositeOperation = 'source-over'
     }
 
-    // create text
     context.globalCompositeOperation = 'source-over'
     context.textAlign = 'center'
     context.textBaseline = 'middle'
@@ -425,7 +399,6 @@ class DiceFactory {
     const bumpMap = isTexture ? null : new THREE.CanvasTexture(canvasBump)
 
     if (allowcache) {
-      // cache new texture
       this.cache_misses++
       this.materials_cache[cachestring] = {
         composite: compositetexture,
@@ -436,14 +409,12 @@ class DiceFactory {
     return { composite: compositetexture, bump: bumpMap }
   }
 
-  /** A stable string identifying a label's content (glyphs / image sources). */
   private labelKey(label: DiceLabel): string {
     if (typeof label === 'string') return label
     if (label instanceof HTMLImageElement) return label.src
     return label.map(part => this.labelKey(part)).join(',')
   }
 
-  /** Builds the cache key that identifies a rendered face. */
   private faceCacheKey(
     diceobj: DicePresetLike,
     text: DiceLabel,
@@ -459,7 +430,6 @@ class DiceFactory {
     return diceobj.type + textCache + index + tex.name + fore + outline + back
   }
 
-  /** The degrees to rotate a polyhedron face's texture, 0 when unrotated. */
   private faceRotationDegrees(shape: string, index: number): number {
     const rotate: Record<string, { all?: number; even?: number; odd?: number }> = {
       d8: { even: -7.5, odd: -127.5 },
@@ -475,7 +445,6 @@ class DiceFactory {
     return rotateface.even ?? 0
   }
 
-  /** Draws one polyhedron (non-d4) face; returns true if it drew an image. */
   private drawPolyFace(
     { ctx, bump, canvas }: DrawContexts,
     text: DiceLabel,
@@ -485,7 +454,6 @@ class DiceFactory {
     margin: number,
     colors: FaceColors,
   ): boolean {
-    // fixes texture rotations on specific dice models
     const degrees = this.faceRotationDegrees(diceobj.shape, index)
     if (degrees) {
       const hw = canvas.width / 2
@@ -500,7 +468,6 @@ class DiceFactory {
       bump.translate(-hw, -hh)
     }
 
-    // custom texture face
     if (text instanceof HTMLImageElement) {
       ctx.drawImage(
         text,
@@ -516,7 +483,6 @@ class DiceFactory {
       return true
     }
 
-    // text-only face
     const label = text as string
     let fontsize = ts / (1 + 2 * margin)
     let textstarty = canvas.height / 2 + 10
@@ -551,7 +517,6 @@ class DiceFactory {
     return false
   }
 
-  /** Draws one line of face text (with outline + the 6/9 disambiguating dot). */
   private drawTextLine(
     ctx: CanvasRenderingContext2D,
     bump: CanvasRenderingContext2D,
@@ -563,7 +528,6 @@ class DiceFactory {
     const trimmed = line.trim()
     const { fore, outline, back } = colors
 
-    // attempt to outline the text with a meaningful color
     if (outline !== 'none' && outline !== back) {
       ctx.strokeStyle = outline
       ctx.lineWidth = 5
@@ -591,7 +555,6 @@ class DiceFactory {
     }
   }
 
-  /** Draws the three glyphs around a d4 face. */
   private drawD4Face(
     { ctx, bump, canvas }: DrawContexts,
     glyphs: DiceLabel[],
@@ -606,9 +569,7 @@ class DiceFactory {
     ctx.font = (ts / 128) * 24 + 'pt ' + diceobj.font
     bump.font = (ts / 128) * 24 + 'pt ' + diceobj.font
 
-    // draw the numbers
     for (const glyph of glyphs) {
-      // custom texture face
       if (glyph instanceof HTMLImageElement) {
         const scaleTexture = glyph.width / canvas.width
         ctx.drawImage(
@@ -624,7 +585,6 @@ class DiceFactory {
         )
       } else {
         const ch = glyph as string
-        // attempt to outline the text with a meaningful color
         if (outline !== 'none' && outline !== back) {
           ctx.strokeStyle = outline
           ctx.lineWidth = 5
@@ -635,7 +595,6 @@ class DiceFactory {
           bump.strokeText(ch, hw, hh - ts * 0.3)
         }
 
-        // draw label in top middle section
         ctx.fillStyle = fore
         ctx.fillText(ch, hw, hh - ts * 0.3)
 
@@ -643,7 +602,6 @@ class DiceFactory {
         bump.fillText(ch, hw, hh - ts * 0.3)
       }
 
-      // rotate 1/3 for next label
       ctx.translate(hw, hh)
       ctx.rotate((Math.PI * 2) / 3)
       ctx.translate(-hw, -hh)
@@ -670,8 +628,6 @@ class DiceFactory {
       colordata.background
   }
 
-  // pass in colorset data from dice-box: choose this roll's concrete colours,
-  // texture and material from the (possibly list-valued) colorset fields.
   setMaterialInfo(): void {
     const prevcolordata = this.colordata
     const prevtexture = this.dice_texture
@@ -685,13 +641,11 @@ class DiceFactory {
     this.resolveTexture()
     this.resolveMaterial()
 
-    // restore the previous colorset if a different one was applied mid-roll
     if (this.colordata && this.colordata.id !== prevcolordata?.id) {
       this.applyColorSet(this.colordata, prevtexture, prevmaterial)
     }
   }
 
-  /** Picks a random member of a list. */
   private randomItem<T>(list: T[]): T {
     return list[Math.floor(Math.random() * list.length)]
   }
@@ -705,11 +659,6 @@ class DiceFactory {
     this.edge_color_rand = ''
   }
 
-  /**
-   * Sets the base colour and, when the colorset uses parallel lists (label /
-   * outline / texture / edge lists the same length as the colour list), picks
-   * matching entries by the same index.
-   */
   private resolveBaseColors(): void {
     const diceColor = this.dice_color
     if (!Array.isArray(diceColor)) {
@@ -761,7 +710,6 @@ class DiceFactory {
       }
       this.label_color_rand = this.label_color[colorindex]
     } else if (this.label_color_rand === '') {
-      // reached only when label_color is not an array (the if excluded it)
       this.label_color_rand = this.label_color as string
     }
   }
@@ -771,7 +719,6 @@ class DiceFactory {
       const colorindex = this.randomItem(this.label_outline)
       this.label_outline_rand = this.label_outline[colorindex]
     } else if (this.label_outline_rand === '') {
-      // reached only when label_outline is not an array (the if excluded it)
       this.label_outline_rand = this.label_outline as string
     }
   }
@@ -847,7 +794,6 @@ class DiceFactory {
   }
 
   fixmaterials(mesh: DiceMesh, unique_sides: number): DiceMesh {
-    // this makes the mesh reuse textures for other sides
     for (let i = 0, l = mesh.geometry.groups.length; i < l; ++i) {
       const matindex = (mesh.geometry.groups[i].materialIndex ?? 0) - 2
       if (matindex < unique_sides) continue
@@ -906,20 +852,17 @@ class DiceFactory {
       const aa = (Math.PI * 2) / fl
       materialIndex = ii[fl] + 1
       for (let j = 0; j < fl - 2; ++j) {
-        // Vertices
         positions.push(
           ...vertices[ii[0]].toArray(),
           ...vertices[ii[j + 1]].toArray(),
           ...vertices[ii[j + 2]].toArray(),
         )
 
-        // Flat face normals
         cb.subVectors(vertices[ii[j + 2]], vertices[ii[j + 1]])
         ab.subVectors(vertices[ii[0]], vertices[ii[j + 1]])
         cb.cross(ab)
         cb.normalize()
 
-        // Vertex Normals (same flat normal for all three vertices)
         const normal = cb.toArray()
         normals.push(...normal, ...normal, ...normal)
 
@@ -934,7 +877,6 @@ class DiceFactory {
         )
       }
 
-      // Set Group for face materials.
       const numOfVertices = (fl - 2) * 3
       for (let k = 0; k < numOfVertices / 3; k++) {
         geom.addGroup(faceFirstVertexIndex, 3, materialIndex)
@@ -981,24 +923,20 @@ class DiceFactory {
       const v1 = 1 - (0.895 / 1.105) * h
       const v2 = 1
       for (let j = 0; j < fl - 2; ++j) {
-        // Vertices
         positions.push(
           ...vertices[ii[0]].toArray(),
           ...vertices[ii[j + 1]].toArray(),
           ...vertices[ii[j + 2]].toArray(),
         )
 
-        // Flat face normals
         cb.subVectors(vertices[ii[j + 2]], vertices[ii[j + 1]])
         ab.subVectors(vertices[ii[0]], vertices[ii[j + 1]])
         cb.cross(ab)
         cb.normalize()
 
-        // Vertex Normals (same flat normal for all three vertices)
         const normal = cb.toArray()
         normals.push(...normal, ...normal, ...normal)
 
-        // UVs
         if (ii.at(-1) === -1 || j >= 2) {
           uvs.push(
             (Math.cos(af) + 1 + tab) / 2 / (1 + tab),
@@ -1014,7 +952,6 @@ class DiceFactory {
           uvs.push(0.5 - w / 2, v1, 0.5 + w / 2, v1, 0.5, v2)
         }
       }
-      // Set Group for face materials.
       const numOfVertices = (fl - 2) * 3
       for (let k = 0; k < numOfVertices / 3; k++) {
         geom.addGroup(faceFirstVertexIndex, 3, materialIndex)
@@ -1030,8 +967,6 @@ class DiceFactory {
     return geom
   }
 
-  // Bevels each face inward by `chamfer`, then stitches in the edge and corner
-  // faces this creates — producing the rounded dice silhouette.
   chamfer_geom(
     vectors: THREE.Vector3[],
     faces: number[][],
@@ -1047,7 +982,6 @@ class DiceFactory {
     return { vectors: chamfer_vectors, faces: chamfer_faces }
   }
 
-  /** Phase 1: bevel each original face, recording its corner-face membership. */
   private chamferBevelFaces(
     vectors: THREE.Vector3[],
     faces: number[][],
@@ -1084,7 +1018,6 @@ class DiceFactory {
     return { chamfer_vectors, chamfer_faces, corner_faces }
   }
 
-  /** Phase 2: add the bevel faces along edges shared by two original faces. */
   private chamferEdgeFaces(faces: number[][], chamfer_faces: number[][]): void {
     for (let i = 0; i < faces.length - 1; ++i) {
       for (let j = i + 1; j < faces.length; ++j) {
@@ -1101,7 +1034,6 @@ class DiceFactory {
     }
   }
 
-  /** The [face, vertex] index pairs where original faces i and j share an edge. */
   private sharedEdgePairs(faces: number[][], i: number, j: number): number[][] {
     const pairs: number[][] = []
     let lastm = -1
@@ -1115,7 +1047,6 @@ class DiceFactory {
     return pairs
   }
 
-  /** Phase 3: close each original vertex with a corner face. */
   private chamferCornerFaces(
     faces: number[][],
     chamfer_faces: number[][],
@@ -1134,7 +1065,6 @@ class DiceFactory {
     }
   }
 
-  /** The next vertex continuing the corner face being assembled, if any. */
   private nextCornerVertex(
     faces: number[][],
     chamfer_faces: number[][],

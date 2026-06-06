@@ -17,7 +17,6 @@ const defaults = {
 }
 
 export class DicePreset {
-  // Built dynamically from `defaults` + the DICE preset, so members are loose.
   [key: string]: any
 
   constructor(name: string) {

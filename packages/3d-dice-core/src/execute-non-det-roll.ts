@@ -6,33 +6,18 @@ import type {
   RollResult,
 } from './types'
 
-/**
- * Throws `notation` and resolves with the face values the dice landed on, in
- * notation order — the physical-roll primitive an app wires to its renderer
- * (e.g. `DiceRenderer.roll`).
- */
 export type PhysicalThrow = (notation: string) => Promise<number[]>
 
-// mirror utils.ts so non-deterministic explosions can't run away either
 const EXPLOSION_CAP = 50
 
 type PoolPlan = {
   sides: DieSides
   count: number
   kind: 'plain' | 'adv' | 'd100'
-  /** Notation segment for this pool's base dice. */
   notation: string
-  /** How many landed values this pool consumes from the base throw. */
   consume: number
 }
 
-/**
- * The physics-sourced counterpart to {@link executeRoll}: instead of computing
- * dice with an RNG, it throws them for real via `throwDice` and reads the values
- * they land on, then assembles the same {@link RollResult} shape. Advantage
- * rolls two physical d20s and keeps one; exploding throws follow-up dice on a
- * natural max; d100 pairs a physical d100 (tens) with a d10 (ones).
- */
 export async function executeNonDetRoll(
   request: RollRequest,
   throwDice: PhysicalThrow,
@@ -47,7 +32,6 @@ export async function executeNonDetRoll(
     .filter(p => p.count > 0)
     .map(p => planPool(p.sides, p.count, advantage))
 
-  // one combined base throw so every base die tumbles in together
   const notation = plans.map(p => p.notation).join('+')
   const landed = notation ? await throwDice(notation) : []
 
@@ -80,13 +64,11 @@ export async function executeNonDetRoll(
   }
 }
 
-/** Notation + value-layout for one pool's base dice. Mirrors `rollPool`'s rules. */
 function planPool(
   sides: DieSides,
   count: number,
   advantage: Advantage | undefined,
 ): PoolPlan {
-  // advantage/disadvantage only applies to d20 (as in rollPool)
   if (advantage !== undefined && sides === 20) {
     return {
       sides,
@@ -97,7 +79,6 @@ function planPool(
     }
   }
   if (sides === 100) {
-    // percentile: a d100 (tens) + a d10 (ones) per die
     return {
       sides,
       count,
@@ -136,7 +117,6 @@ async function buildPool(
       rolls.push([a, b])
       keptValue = advantage === 'adv' ? Math.max(a, b) : Math.min(a, b)
     } else if (kind === 'd100') {
-      // base holds all tens then all ones (notation spawns Nd100 then Nd10)
       const value = combineD100(base[i] ?? 0, base[count + i] ?? 0)
       rolls.push([value])
       keptValue = value
@@ -159,7 +139,6 @@ async function buildPool(
   return pool
 }
 
-/** Throws follow-up dice while the last one shows a natural max (capped). */
 async function explodeChain(
   sides: DieSides,
   seed: number,
@@ -175,7 +154,6 @@ async function explodeChain(
   return chain
 }
 
-/** Throws a single physical die and returns its value (pairing d100 + d10). */
 async function rollOne(
   sides: DieSides,
   throwDice: PhysicalThrow,
@@ -188,11 +166,6 @@ async function rollOne(
   return landed[0] ?? 0
 }
 
-/**
- * Combines a landed d100 (tens, valued 10..100 with `00` = 100) and d10 (ones,
- * valued 1..10 with `0` = 10) into a 1..100 percentile — the inverse of
- * `toDiceBoxNotation`'s split.
- */
 function combineD100(tens: number, ones: number): number {
   const value = (tens % 100) + (ones % 10)
   return value === 0 ? 100 : value

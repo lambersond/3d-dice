@@ -2,10 +2,6 @@
 
 A **vendored fork** of [`@3d-dice/dice-box-threejs`](https://github.com/3d-dice/dice-box-threejs): a 3D dice engine built on [three.js](https://threejs.org/) and [cannon-es](https://github.com/pmndrs/cannon-es). It renders dice into a DOM canvas, simulates the physics throw, and either lands the dice on predetermined values (deterministic) or reads the result off the physics (non-deterministic).
 
-This is **not** consumed directly by apps. It sits behind
-[`@lambersond/3d-dice-core`](../3d-dice-core)'s `DiceRenderer`, which is the
-stable seam every consumer uses. Swapping the engine never changes that surface.
-
 ## Features
 
 - **Real physics dice**: three.js rendering + cannon-es simulation; dice tumble,

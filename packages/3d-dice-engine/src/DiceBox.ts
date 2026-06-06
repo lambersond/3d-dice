@@ -33,25 +33,48 @@ type ThrowVectors = {
   axis: AxisAngle
 }
 
-/**
- * One throw's lifecycle, tracked independently of every other throw on the
- * table. A throw resolves the moment ITS OWN dice come to rest (not when the
- * whole world rests), then — a fixed dwell later — its dice play their exit and
- * leave, even while other throws are still tumbling or new ones are spawning.
- */
+// iOS/WebKit defers media buffering until a user gesture, so an un-gestured
+// <audio> can fire neither `canplaythrough` nor `error`. Cap the wait so a
+// deferred clip resolves (skipped) instead of hanging the load chain.
+const AUDIO_LOAD_TIMEOUT_MS = 8000
+
+function describeWebGLSupport(): Record<string, unknown> {
+  const info: Record<string, unknown> = {
+    userAgent: typeof navigator === 'undefined' ? 'n/a' : navigator.userAgent,
+  }
+  try {
+    const canvas = document.createElement('canvas')
+    const gl2 = canvas.getContext('webgl2')
+    const gl1 = canvas.getContext('webgl')
+    const gl = gl2 ?? gl1
+    info.webgl2 = !!gl2
+    info.webgl1 = !!gl1
+    if (gl) {
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info')
+      info.renderer = dbg
+        ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+        : gl.getParameter(gl.RENDERER)
+      info.vendor = dbg
+        ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL)
+        : gl.getParameter(gl.VENDOR)
+      info.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE)
+    }
+  } catch (probeError) {
+    info.probeError = String(probeError)
+  }
+  return info
+}
+
 type ThrowGroup = {
   dice: DiceMesh[]
-  /** Fires once this throw's dice rest (reads their values, resolves the promise). */
   resolve: () => void
   resolved: boolean
   removal: ResolvedRemoval
-  /** Timestamp the whole group came to rest, or null while still tumbling. */
   settledAt: number | null
   exiting: boolean
   exitStart: number
 }
 
-/** What a throw's promise resolves to (best-effort; the app reads its own values). */
 type ThrowResult = RollResults | DiceResult[] | undefined
 
 const defaultConfig: DiceBoxConfig = {
@@ -80,7 +103,6 @@ const defaultConfig: DiceBoxConfig = {
 }
 
 class DiceBox {
-  // --- configuration (merged from defaultConfig + constructor options) ---
   assetPath!: string
   framerate!: number
   sounds!: boolean
@@ -104,7 +126,6 @@ class DiceBox {
   onRemoveDiceComplete!: (results: DiceResult[]) => void
   onEmpty!: () => void
 
-  // --- three.js / cannon-es scene (built in the constructor / initialize) ---
   container: HTMLElement
   dimensions: THREE.Vector2
   scene: THREE.Scene
@@ -119,6 +140,7 @@ class DiceBox {
 
   // --- engine state ---
   initialized = false
+  private soundsRequested = false
   adaptive_timestep = false
   last_time = 0
   running: number | boolean = false
@@ -126,25 +148,16 @@ class DiceBox {
   iteration = 0
   steps = 0
   dieIndex = 0
-  // Collision groups isolate concurrent throws so they can't corrupt each
-  // other's predetermined landings. A die collides with the table/walls
-  // (WALLS_GROUP, bit 0) plus its own throw's group. Deterministic throws each
-  // get a private bit (2..30); every NON-deterministic throw shares one group
-  // (NON_DET_GROUP, bit 1) so those dice DO collide with each other — they have
-  // no predetermined landing to protect — but never with deterministic dice.
   private static readonly WALLS_GROUP = 1
   private static readonly NON_DET_GROUP = 1 << 1
   private throwGroupCounter = 0
   private currentThrowGroup = 1 << 2
-  // Default removal: shrink to nothing 1s after the dice rest, over 450ms —
-  // the behaviour core's DiceRenderer used to hardcode before the engine owned
-  // it. A throw can override any of these via roll/add's `removal` option.
   private static readonly DEFAULT_REMOVAL: ResolvedRemoval = {
     style: 'shrink',
     dwellMs: 1000,
     durationMs: 450,
   }
-  soundDelay = 10 // time between sound effects in ms
+  soundDelay = 10
   animstate = ''
   lastSoundType = ''
   lastSoundStep = 0
@@ -154,9 +167,6 @@ class DiceBox {
   box_body: Record<string, CANNON.Body>
   diceList: DiceMesh[]
   notationVectors: NotationLike | null
-  // Every in-flight throw. One continuous loop services them all, but each
-  // resolves + removes on its OWN schedule (when its dice rest), so throws
-  // never wait for the whole table — dice leave even as new ones are added.
   private throwGroups: ThrowGroup[] = []
   colorData!: ColorData
   sounds_table: Record<string, HTMLAudioElement[]>
@@ -197,14 +207,12 @@ class DiceBox {
     this.notationVectors = null
     this.selector = { animate: true, rotate: true, intersected: null, dice: [] }
 
-    // merge defaults + any options coming in
     Object.assign(this, defaultConfig, options)
 
     this.DiceColors = new DiceColors({ assetPath: this.assetPath })
     this.DiceFactory = new DiceFactory({ baseScale: this.baseScale })
     this.DiceFactory.setBumpMapping(true)
 
-    // post-config settings
     this.surface = THEMES[this.theme_surface].surface
   }
 
@@ -223,12 +231,18 @@ class DiceBox {
   }
 
   async initialize(): Promise<void> {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    try {
+      this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+    } catch (error) {
+      console.error(
+        '[dice-engine] Failed to create WebGL renderer.',
+        describeWebGLSupport(),
+        error,
+      )
+      throw error
+    }
     this.container.appendChild(this.renderer.domElement)
     this.renderer.shadowMap.enabled = this.shadows
-    // three r0.184 removed PCFSoftShadowMap (it now falls back to PCFShadowMap
-    // and warns); use PCFShadowMap directly. Soft shadows would now come from
-    // the light's shadow.radius/blurSamples rather than the shadow-map type.
     this.renderer.shadowMap.type = THREE.PCFShadowMap
     this.renderer.setClearColor(0x000000, 0)
 
@@ -246,18 +260,21 @@ class DiceBox {
       colorset: this.theme_colorset,
       texture: this.theme_texture,
       material: this.theme_material,
-    }).catch(() => {
-      throw new Error('Unable to load theme')
+    }).catch(error => {
+      console.error('[dice-engine] Unable to load theme/textures:', error)
+      throw error instanceof Error ? error : new Error('Unable to load theme')
     })
-
-    if (this.sounds) {
-      await this.loadSounds().catch(() => {
-        throw new Error('Unable to load sounds')
-      })
-    }
 
     this.initialized = true
     this.renderer.render(this.scene, this.camera)
+  }
+
+  private ensureSoundsLoaded(): void {
+    if (!this.sounds || this.soundsRequested) return
+    this.soundsRequested = true
+    this.loadSounds().catch(error => {
+      console.error('[dice-engine] Failed to load sounds (non-fatal):', error)
+    })
   }
 
   makeWorldBox(): void {
@@ -362,13 +379,6 @@ class DiceBox {
     this.colorData = colorData
   }
 
-  /**
-   * Applies a per-throw theme to the factory just before a throw spawns its
-   * dice. Because each die bakes its materials at creation, binding the colour
-   * to the throw (rather than via a separate global `updateConfig`) lets a
-   * coalesced burst keep every roller's colours. Omitted fields fall back to the
-   * box's configured theme; passing no theme leaves the current colorset as-is.
-   */
   private async applyThemeForThrow(theme?: ThemeOptions): Promise<void> {
     if (!theme) return
     const colorData = theme.theme_customColorset
@@ -390,7 +400,6 @@ class DiceBox {
       metal: 9,
     }
 
-    // dice-hit clip counts per material (others fall back to plastic)
     const dieMaterials: Record<string, number> = {
       coin: 6,
       metal: 12,
@@ -407,7 +416,6 @@ class DiceBox {
       surfaces[this.surface],
       s => `sounds/surfaces/surface_${this.surface}${s}.mp3`,
     )
-    // load the coin sounds for all sets
     await this.loadSoundGroup(
       this.sounds_dice,
       'coin',
@@ -437,15 +445,29 @@ class DiceBox {
   }
 
   loadAudio(src: string): Promise<HTMLAudioElement | undefined> {
-    return new Promise<HTMLAudioElement>((resolve, reject) => {
+    return new Promise<HTMLAudioElement | undefined>(resolve => {
       const audio = new Audio()
-      audio.oncanplaythrough = () => resolve(audio)
       audio.crossOrigin = 'anonymous'
+      audio.preload = 'auto'
+      let settled = false
+      let timer!: ReturnType<typeof setTimeout>
+      const finish = (value: HTMLAudioElement | undefined) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+      timer = setTimeout(() => {
+        console.warn(`[dice-engine] Audio load timed out, skipping: ${src}`)
+        finish(undefined)
+      }, AUDIO_LOAD_TIMEOUT_MS)
+      audio.oncanplaythrough = () => finish(audio)
+      audio.onerror = () => {
+        console.error(`[dice-engine] Unable to load audio: ${src}`)
+        finish(undefined)
+      }
       audio.src = src
-      audio.onerror = () => reject(new Error(`Unable to load audio: ${src}`))
-    }).catch(() => {
-      console.error('Unable to load audio')
-      return undefined
+      audio.load()
     })
   }
 
@@ -582,7 +604,6 @@ class DiceBox {
       return needResize
     }
 
-    // Coalesce a burst of resize events into one update per animation frame.
     let frame: number | undefined
     globalThis.addEventListener('resize', () => {
       if (frame) globalThis.cancelAnimationFrame(frame)
@@ -601,7 +622,6 @@ class DiceBox {
     return vec
   }
 
-  /** Computes one die's launch position + velocity/spin from a base vector. */
   private throwVectors(
     diceobj: { shape: string; inertia: number },
     vector: Vec2Like,
@@ -653,7 +673,6 @@ class DiceBox {
     }
   }
 
-  /** Returns a parsed notation populated with per-die throw vectors. */
   getNotationVectors(
     notation: unknown,
     vector: Vec2Like,
@@ -693,7 +712,6 @@ class DiceBox {
     return notationVectors as unknown as NotationLike
   }
 
-  /** Normalises a d10/d100 face reading into its scored value (0 → 10/100). */
   private normalizeDieValue(type: string, value: number): number {
     if (type === 'd10' && value === 0) return 10
     if (type === 'd100' && value === 0) return 100
@@ -701,11 +719,9 @@ class DiceBox {
     return value
   }
 
-  // swaps dice faces to match the desired (predetermined) result
   swapDiceFace(dicemesh: DiceMesh, result: number | string): void {
     const diceobj = this.DiceFactory.get(dicemesh.notation.type)
 
-    // flag this result as forced
     dicemesh.resultReason = 'forced'
 
     if (diceobj.shape === 'd4') {
@@ -726,17 +742,13 @@ class DiceBox {
     if (valueindex < 0 || resultindex < 0) return
     if (valueindex === resultindex) return
 
-    // clone the geom before modifying it
     const geom = dicemesh.geometry.clone()
 
-    // the mesh's materials start at index 2, except on d10 meshes (1)
     const magic = diceobj.shape === 'd10' ? 1 : 2
-    // d2 meshes have many more faces and offset differently
     const material_value = diceobj.shape === 'd2' ? valueindex + 1 : valueindex + magic
     const material_result =
       diceobj.shape === 'd2' ? resultindex + 1 : resultindex + magic
 
-    // find the faces that use the matching material index for value/result
     const geomindex_value: number[] = []
     const geomindex_result: number[] = []
     for (let i = 0, l = geom.groups.length; i < l; ++i) {
@@ -747,7 +759,6 @@ class DiceBox {
 
     if (geomindex_value.length <= 0 || geomindex_result.length <= 0) return
 
-    // swap the materials
     for (const i of geomindex_result) geom.groups[i].materialIndex = material_value
     for (const i of geomindex_value) geom.groups[i].materialIndex = material_result
 
@@ -784,7 +795,6 @@ class DiceBox {
     dicemesh.geometry = geom
   }
 
-  /** Forces the predetermined faces for a throw, fixing dice that missed. */
   private applyForcedResults(notation: NotationLike, baseIndex: number): void {
     if (!notation.result || notation.result.length === 0) return
     for (let i = 0; i < notation.result.length; i++) {
@@ -795,27 +805,19 @@ class DiceBox {
     }
   }
 
-  /** Whether a throw lands on predetermined values (has forced `@` results). */
   private isDeterministic(notation: NotationLike): boolean {
     return (notation.result?.length ?? 0) > 0
   }
 
-  /**
-   * Selects the collision group for the throw about to spawn: a fresh private
-   * bit (2..30) for a deterministic throw so it can't be disturbed, or the
-   * shared non-deterministic group so those dice interact with each other.
-   */
   private setThrowGroup(deterministic: boolean): void {
     if (!deterministic) {
       this.currentThrowGroup = DiceBox.NON_DET_GROUP
       return
     }
-    // deterministic throws cycle bits 2..30 (bit 0 = walls, bit 1 = non-det)
     this.throwGroupCounter = (this.throwGroupCounter + 1) % 29
     this.currentThrowGroup = 1 << (this.throwGroupCounter + 2)
   }
 
-  // spawns one dicemesh from a single vectordata object
   spawnDice(vectordata: VectorData, reset: DiceMesh | false = false): void {
     const { pos, axis, angle, velocity } = vectordata
     let dicemesh: DiceMesh
@@ -865,8 +867,6 @@ class DiceBox {
   }
 
   eventCollide({ body, target }: { body: DiceBody; target: DiceBody }): void {
-    // collision events fire for both bodies; the checks below limit how often
-    // sounds play. Skip entirely while pre-simulating.
     if (this.animstate === 'simulate' || !this.sounds || this.volume <= 0) return
 
     const now = Date.now()
@@ -874,8 +874,6 @@ class DiceBox {
     const currentSoundType = body.mass > 0 ? 'dice' : 'table'
     const tooSoon = this.lastSoundStep === stepnumber || this.lastSound > now
 
-    // a dice clack should never be skipped in favour of a table sound, and two
-    // dice clacks shouldn't stack within the same step
     if (tooSoon && currentSoundType !== 'dice') return
     if (tooSoon && currentSoundType === 'dice' && this.lastSoundType === 'dice') {
       return
@@ -915,12 +913,9 @@ class DiceBox {
   }
 
   checkForRethrow(_dicemesh: DiceMesh): boolean {
-    // Roll-functions (e.g. "{r,2}" = reroll all 2s) are not implemented in this
-    // engine yet, so dice never re-throw on their own.
     return false
   }
 
-  /** Resolves one die during settling: still moving, re-thrown, or at rest. */
   private resolveDie(
     dicemesh: DiceMesh,
     forcedFinish: boolean,
@@ -930,7 +925,6 @@ class DiceBox {
     if (dicemesh.body.sleepState < sleepState && !forcedFinish) return 'awake'
     if (dicemesh.body.type === CANNON.Body.KINEMATIC) return 'settled'
 
-    // record the resting value (or, for a reroll in progress, the new value)
     let rethrow = false
     if (dicemesh.result.length === 0) {
       dicemesh.storeRolledValue(dicemesh.resultReason)
@@ -956,7 +950,6 @@ class DiceBox {
     return 'settled'
   }
 
-  /** Schedules the next animation frame, honouring the target framerate. */
   private scheduleFrame(timeDiff: number, run: () => void): void {
     if (!this.adaptive_timestep && timeDiff < this.framerate) {
       setTimeout(
@@ -981,7 +974,6 @@ class DiceBox {
       ++this.steps
     }
 
-    // update physics interactions visually
     for (const die of this.diceList) {
       const { position, quaternion } = die.body
       die.position.set(position.x, position.y, position.z)
@@ -990,16 +982,12 @@ class DiceBox {
 
     this.last_time = this.last_time + neededSteps * this.framerate * 1000
 
-    // advance each throw on its own schedule: resolve it when ITS dice rest,
-    // then dwell → exit → remove, independent of every other throw
     if (this.running === threadid) this.serviceGroups(time)
 
     this.renderer.render(this.scene, this.camera)
 
     if (this.running !== threadid) return
 
-    // the loop lives while any throw is still tumbling, dwelling, or exiting;
-    // once the table has fully drained, settle to idle and signal empty
     if (this.throwGroups.length === 0) {
       this.running = false
       this.rolling = false
@@ -1012,11 +1000,6 @@ class DiceBox {
     this.scheduleFrame(time_diff, () => this.animateThrow(threadid))
   }
 
-  /**
-   * Advances every in-flight throw by one frame: resolve a throw the moment its
-   * own dice rest, start its dwell → exit independently, and drop it once its
-   * dice have left. Throws never wait on one another.
-   */
   private serviceGroups(now: number): void {
     const forcedFinish = this.iteration > this.iterationLimit
     this.throwGroups = this.throwGroups.filter(group =>
@@ -1024,7 +1007,6 @@ class DiceBox {
     )
   }
 
-  /** Advances one throw a frame; returns false once it has fully left. */
   private serviceGroup(
     group: ThrowGroup,
     now: number,
@@ -1042,7 +1024,6 @@ class DiceBox {
     if (!group.exiting && now - group.settledAt >= group.removal.dwellMs) {
       group.exiting = true
       group.exitStart = now
-      // a leaving throw shouldn't block dice still being thrown in
       for (const die of group.dice) die.body.collisionResponse = false
     }
 
@@ -1056,7 +1037,6 @@ class DiceBox {
     return false
   }
 
-  /** Whether every die in one throw has come to rest (per-throw `throwFinished`). */
   private groupSettled(group: ThrowGroup, forcedFinish: boolean): boolean {
     for (const die of group.dice) {
       if (this.resolveDie(die, forcedFinish) !== 'settled') return false
@@ -1064,11 +1044,6 @@ class DiceBox {
     return true
   }
 
-  /**
-   * Starts the animation loop if one isn't already running. A running loop
-   * already services every throw, so a mid-flight add() just spawns its dice +
-   * pushes its group and the loop picks it up — no waiting on other throws.
-   */
   private ensureAnimating(): void {
     if (this.running !== false) return
     this.animstate = 'throw'
@@ -1079,8 +1054,6 @@ class DiceBox {
   }
 
   startClickThrow(notation: unknown): NotationLike {
-    // A throw always spawns into the live world — it never clears the table.
-    // Each throw's dice leave later on their own removal schedule instead.
     const vector = {
       x: (Math.random() * 2 - 0.5) * this.display.currentWidth,
       y: -(Math.random() * 2 - 0.5) * this.display.currentHeight,
@@ -1093,8 +1066,6 @@ class DiceBox {
 
   clearDice(): void {
     this.running = false
-    // an explicit clear drops every in-flight throw (resolving any that hadn't
-    // settled) — it does NOT fire onEmpty, which signals a *timed* drain
     this.cancelGroups()
     let dice: DiceMesh | undefined
     while ((dice = this.diceList.pop())) {
@@ -1108,8 +1079,6 @@ class DiceBox {
     }, 100)
   }
 
-  /** Fills in a throw's removal spec from defaults; the object identity is the
-   * per-throw group key, so each roll/add gets a distinct spec instance. */
   private resolveRemoval(removal?: RemovalOptions): ResolvedRemoval {
     const d = DiceBox.DEFAULT_REMOVAL
     return {
@@ -1119,7 +1088,6 @@ class DiceBox {
     }
   }
 
-  /** Applies one frame of a throw's exit: shrink scales down, fade lowers opacity. */
   private applyExit(
     dice: DiceMesh[],
     style: ResolvedRemoval['style'],
@@ -1136,7 +1104,6 @@ class DiceBox {
     }
   }
 
-  /** Removes one die from the scene, physics world, and the dice list. */
   private removeDie(die: DiceMesh): void {
     const index = this.diceList.indexOf(die)
     if (index !== -1) this.diceList.splice(index, 1)
@@ -1144,7 +1111,6 @@ class DiceBox {
     if (die.body) this.world.removeBody(die.body)
   }
 
-  /** Resolves and drops every in-flight throw, restoring any mid-exit dice. */
   private cancelGroups(): void {
     for (const group of this.throwGroups) {
       for (const die of group.dice) {
@@ -1161,7 +1127,6 @@ class DiceBox {
     this.throwGroups = []
   }
 
-  /** One die's latest result, identified by its current index. */
   private dieResult(die: DiceMesh, id: number): DiceResult {
     const last = die.result.at(-1)!
     return {
@@ -1226,9 +1191,6 @@ class DiceBox {
     notationString: unknown,
     options: RollOptions = {},
   ): Promise<ThrowResult> {
-    // A roll joins the live table: the engine adds into the running world so
-    // dice already at rest leave on their own schedule even as these arrive. An
-    // empty table simply starts fresh (there's nothing to join).
     return this.add(notationString, options)
   }
 
@@ -1237,16 +1199,12 @@ class DiceBox {
     options: RollOptions = {},
   ): Promise<ThrowResult> {
     const { theme, removal, onSpawned } = options
+    this.ensureSoundsLoaded()
     const removalSpec = this.resolveRemoval(removal)
     await this.applyThemeForThrow(theme)
 
-    // Read the live count AFTER the await: the running loop may have removed a
-    // finishing throw while the theme resolved. Everything from here to the
-    // group push is synchronous, so the count stays stable for the slice below.
     const existing = this.diceList.length
 
-    // a throw never clears the table, it joins it — so throws already resting
-    // keep removing on their own schedule
     const throwNotation = this.startClickThrow(notationString)
     if (
       !throwNotation ||
@@ -1261,28 +1219,19 @@ class DiceBox {
     const deterministic = this.isDeterministic(throwNotation)
     this.setThrowGroup(deterministic)
     for (const vectordata of throwNotation.vectors) this.spawnDice(vectordata)
-    // this throw's dice (the deterministic relaunch below reuses these meshes)
     const groupDice = this.diceList.slice(existing)
 
     if (deterministic) {
-      // Pre-simulate ONLY these dice (existing ones are frozen + restored) so
-      // their faces can be swapped to the predetermined values before they're
-      // seen, without disturbing throws already in flight. An empty table
-      // freezes nothing, so this simulates the whole first throw.
       this.simulateAddedDice(existing)
       this.steps = 0
       this.iteration = 0
-      // relaunch just these dice so they re-throw from the start
       throwNotation.vectors.forEach((vectordata, i) => {
         const die = this.diceList[existing + i]
         if (die) this.spawnDice(vectordata, die)
       })
       this.applyForcedResults(throwNotation, existing)
-      // wake them — the pre-simulation can leave them sleeping (upstream PR #21)
       for (const die of groupDice) die.body?.wakeUp()
     } else {
-      // non-deterministic: already launched by spawnDice; tumble them live so
-      // they collide with the other non-deterministic dice (shared group).
       this.steps = 0
       this.iteration = 0
     }
@@ -1298,19 +1247,13 @@ class DiceBox {
           resolve(this.reportThrow(groupDice, isFresh)),
         ),
       )
-      // join the running loop if there is one, otherwise start it
       this.ensureAnimating()
-      // dice now exist — release any throw waiting to join after this one
       onSpawned?.()
     })
   }
 
   async reroll(diceIdArray: number[]): Promise<DiceResult[]> {
-    // Not used by the app today; kept functional. Re-throws the named dice as
-    // their own throw group; their original group (if still on the table)
-    // continues its own removal schedule.
     this.iteration = 0
-    // reset the clock so the reroll animates from the beginning (upstream PR #20)
     this.last_time = 0
     const dice = diceIdArray
       .map(id => this.diceList[id])
@@ -1340,7 +1283,6 @@ class DiceBox {
     })
   }
 
-  /** Builds a ThrowGroup in its initial (unsettled) state. */
   private makeGroup(
     dice: DiceMesh[],
     removal: ResolvedRemoval,
@@ -1357,11 +1299,6 @@ class DiceBox {
     }
   }
 
-  /**
-   * Fires a throw's completion callbacks/events and returns its results. Every
-   * throw reports its own dice via `addDiceComplete`; the first throw onto an
-   * empty table also announces the richer (global) `rollComplete`.
-   */
   private reportThrow(dice: DiceMesh[], isFresh: boolean): ThrowResult {
     const results = dice.map(die =>
       this.dieResult(die, this.diceList.indexOf(die)),
@@ -1374,11 +1311,6 @@ class DiceBox {
     return results
   }
 
-  /**
-   * Best-effort global `rollComplete`. The whole-table snapshot can be
-   * momentarily inconsistent while other throws are mid-flight, so any failure
-   * is swallowed — the per-throw `addDiceComplete` above is the reliable one.
-   */
   private announceRollComplete(): void {
     try {
       const results = this.getDiceResults()
@@ -1386,17 +1318,9 @@ class DiceBox {
       document.dispatchEvent(
         new CustomEvent('rollComplete', { detail: results }),
       )
-    } catch {
-      // global view is optional; the per-throw report already fired
-    }
+    } catch {}
   }
 
-  /**
-   * Pre-simulates only the dice at indices >= startIndex to rest, freezing the
-   * dice before startIndex and restoring them exactly afterward. Combined with
-   * per-throw collision groups, the added dice settle independently of the
-   * in-flight throw they're joining, so its predetermined landings hold.
-   */
   private simulateAddedDice(startIndex: number): void {
     const frozen = this.diceList.slice(0, startIndex).map(die => ({
       die,
@@ -1431,7 +1355,6 @@ class DiceBox {
     }
   }
 
-  /** Whether every die at indices >= startIndex has come to rest. */
   private addedDiceSettled(startIndex: number): boolean {
     const forcedFinish = this.iteration > this.iterationLimit
     for (let i = startIndex; i < this.diceList.length; i++) {

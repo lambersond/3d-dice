@@ -1,7 +1,6 @@
 import { executeNonDetRoll, type PhysicalThrow } from './execute-non-det-roll'
 import type { RollRequest } from './types'
 
-/** A throwDice that replays scripted responses and records the notations asked. */
 function scripted(responses: number[][]): {
   throwDice: PhysicalThrow
   calls: string[]
@@ -97,7 +96,6 @@ describe('executeNonDetRoll', () => {
       modifier: 0,
       exploding: true,
     }
-    // base 6 -> explode 6 -> explode 2 (stop)
     const { throwDice, calls } = scripted([[6], [6], [2]])
 
     const result = await executeNonDetRoll(request, throwDice, opts)
@@ -154,7 +152,6 @@ describe('executeNonDetRoll', () => {
       pools: [{ sides: 100, count: 2 }],
       modifier: 0,
     }
-    // notation 2d100+2d10 -> [tens0, tens1, ones0, ones1]
     const { throwDice, calls } = scripted([[70, 10, 3, 5]])
 
     const result = await executeNonDetRoll(request, throwDice, opts)

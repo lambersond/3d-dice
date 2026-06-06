@@ -2,15 +2,6 @@
 import { CUSTOM_COLORSET_KEY } from './constants'
 import type { RollTheme } from './types'
 
-/**
- * Translates a high-level `RollTheme` into the snake_case payload that
- * `@lambersond/3d-dice-engine` expects from `updateConfig` — the single place
- * that knows the engine's theme keys.
- *
- * A custom-color theme (`colorset === CUSTOM_COLORSET_KEY` with a `customColor`)
- * is sent as a one-off `theme_customColorset`; any other colorset is passed
- * through as a preset key via `theme_colorset`.
- */
 export function themeToBoxConfig(theme: RollTheme): Record<string, unknown> {
   if (theme.colorset === CUSTOM_COLORSET_KEY && theme.customColor) {
     return {
