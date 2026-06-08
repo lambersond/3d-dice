@@ -45,7 +45,7 @@ export type RollTheme = {
   customColor?: string
 }
 
-export type RemovalStyle = 'shrink' | 'fade'
+export type RemovalStyle = 'shrink' | 'fade' | 'reset' | 'none'
 
 export type RemovalOptions = {
   style?: RemovalStyle
@@ -110,8 +110,24 @@ export type DiceRendererConfig = {
   shadows?: boolean
   /** Detect hover/click on visible dice; register handlers via onDieHover/onDieClick. */
   enableDiceSelection?: boolean
+  /** Let dice be grabbed and flicked (drag-to-reroll); see onDieReroll. */
+  enableDiceDrag?: boolean
+  /** Disposition for a flicked/tapped die: `reset` (return home, for persistent
+   * trays) or `shrink`/`fade` (leave, for transient). Defaults to `reset`. */
+  dragRemoval?: RemovalOptions
   /** CSS overrides for the auto-created overlay container (see DiceOverlayConfig). */
   overlay?: DiceOverlayConfig
+}
+
+/**
+ * A die's settled face after a reroll/flick, with its stable id and sides so a
+ * consumer can log or react to it. Delivered to onDieReroll subscribers.
+ */
+export type DieRoll = {
+  dieId: number
+  value: number
+  sides: number
+  type: string
 }
 
 /**

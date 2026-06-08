@@ -47,6 +47,12 @@ export type DiceGeometry = THREE.BufferGeometry & {
  * A die: a `THREE.Mesh` plus the per-die runtime state and value helpers the
  * factory attaches to each mesh.
  */
+/** A die's resting home transform, recorded for the `reset` disposition. */
+export interface DiePlacement {
+  position: Vec3Like
+  quaternion: { x: number; y: number; z: number; w: number }
+}
+
 export interface DiceMesh extends THREE.Mesh {
   geometry: DiceGeometry
   material: THREE.Material[]
@@ -59,6 +65,8 @@ export interface DiceMesh extends THREE.Mesh {
   rerolls: number
   rerolling: boolean
   resultReason: string
+  /** Home transform to return to under the `reset` disposition (see DiceBox). */
+  placement?: DiePlacement
   getFaceValue(): FaceValue
   storeRolledValue(reason?: string): void
   getLastValue(): FaceValue
@@ -165,7 +173,7 @@ export interface ThemeOptions {
 }
 
 /** How a throw's dice leave the table once their dwell elapses. */
-export type RemovalStyle = 'shrink' | 'fade'
+export type RemovalStyle = 'shrink' | 'fade' | 'reset' | 'none'
 
 /** Per-throw removal options (everything optional; gaps fall back to defaults). */
 export interface RemovalOptions {
@@ -288,4 +296,8 @@ export interface DiceBoxConfig {
   onDiceHover: (data: DiceEventData | null) => void
   /** Fires when a visible die is clicked. */
   onDiceClick: (data: DiceEventData) => void
+  /** Attach pointer drag handlers so dice can be grabbed and flicked. */
+  enableDiceDrag: boolean
+  /** Disposition applied to a flicked/tapped die (default returns it home). */
+  dragRemoval: RemovalOptions
 }

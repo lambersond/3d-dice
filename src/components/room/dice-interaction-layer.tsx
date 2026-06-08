@@ -1,37 +1,24 @@
 'use client'
 
 import { useState } from 'react'
-import { useDiceRenderer, useDieEvents } from '@lambersond/3d-dice-react'
-import type { DieEvent } from '@lambersond/3d-dice-core'
-
-// Match the dwell used for the original throw so a rerolled die lingers just as
-// long before it leaves the table.
-const REROLL_REMOVAL = { style: 'shrink' as const, dwellMs: 3000 }
+import { useDieEvents } from '@lambersond/3d-dice-react'
+import type { DieEvent, DieRoll } from '@lambersond/3d-dice-core'
 
 /**
- * Floating layer for the 3D dice: shows a result popover while hovering a
- * settled die and rerolls it on click. Renders nothing until a die is hovered.
- * `onReroll` is called with the die's stable id and new value once the reroll
- * settles, so the logged result can adopt it.
+ * Floating layer for the 3D dice. Shows a result popover while hovering a
+ * settled die; the grab/flick (and tap) gesture itself lives in the engine, so
+ * this only forwards each flick's settled values via `onReroll` for logging.
+ * Renders nothing until a die is hovered.
  */
 export function DiceInteractionLayer({
   onReroll,
-}: Readonly<{ onReroll?: (dieId: number, value: number) => void }>) {
-  const renderer = useDiceRenderer()
+  flickable = true,
+}: Readonly<{ onReroll?: (rolls: DieRoll[]) => void; flickable?: boolean }>) {
   const [hovered, setHovered] = useState<DieEvent | undefined>()
 
   useDieEvents({
     onHover: die => setHovered(die ?? undefined),
-    onClick: die => {
-      renderer
-        .reroll([die.id], { removal: REROLL_REMOVAL })
-        .then(results => {
-          const next = results[0]?.value
-          if (next !== undefined) onReroll?.(die.dieId, next)
-        })
-        .catch(() => {})
-      setHovered(undefined)
-    },
+    onReroll: rolls => onReroll?.(rolls),
   })
 
   if (!hovered) return <></>
@@ -52,7 +39,9 @@ export function DiceInteractionLayer({
             {hovered.value}
           </span>
         </div>
-        <span className='text-[10px] text-text-tertiary'>Click to reroll</span>
+        {flickable && (
+          <span className='text-[10px] text-text-tertiary'>Drag to flick</span>
+        )}
       </div>
     </div>
   )

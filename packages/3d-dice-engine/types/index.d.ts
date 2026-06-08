@@ -62,10 +62,21 @@ export interface DiceBoxOptions {
   onDiceHover: (data: DiceEventData | null) => void
   /** Fires when a visible die is clicked. */
   onDiceClick: (data: DiceEventData) => void
+  /** Attach pointer drag handlers so dice can be grabbed and flicked. */
+  enableDiceDrag: boolean
+  /** Disposition applied to a flicked/tapped die (default returns it home). */
+  dragRemoval: RemovalOptions
+}
+
+/** A 3D vector, used for a die's launch velocity/position/spin. */
+export interface Vec3 {
+  x: number
+  y: number
+  z: number
 }
 
 /** How a throw's dice leave the table once their dwell elapses. */
-export type RemovalStyle = 'shrink' | 'fade'
+export type RemovalStyle = 'shrink' | 'fade' | 'reset' | 'none'
 
 /** Per-throw removal options; gaps fall back to the engine's defaults. */
 export interface RemovalOptions {
@@ -104,10 +115,22 @@ export default class DiceBox {
   add(notation: string | string[], options?: RollOptions): Promise<unknown>
   reroll(
     diceIdArray: number[],
-    options?: { removal?: RemovalOptions },
+    options?: {
+      removal?: RemovalOptions
+      /** Launch velocity (world units/sec); defaults to a straight-up flick. */
+      velocity?: Vec3
+      /** Start position to teleport the die to before launching. */
+      position?: Vec3
+      /** Angular velocity (spin) imparted on launch. */
+      angular?: Vec3
+    },
   ): Promise<unknown>
+  /** Take dice off the table by index (e.g. a "set aside" action). */
+  remove(diceIdArray: number[]): Promise<unknown>
   clearDice(): void
   updateConfig(options?: Partial<DiceBoxOptions>): Promise<void>
+  /** Stop the loop, drop dice, detach listeners + canvas, release the context. */
+  dispose(): void
 
   // The renderer reads only the canvas, for WebGL context-loss handling; the
   // engine now owns the per-throw exit animation and dice lifecycle.

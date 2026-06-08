@@ -10,7 +10,7 @@ const mockRenderer = {
   updateConfig: jest.fn(() => Promise.resolve()),
 }
 
-jest.mock('./use-dice-renderer', () => ({
+jest.mock('./dice-renderer-provider', () => ({
   useDiceRenderer: () => mockRenderer,
 }))
 

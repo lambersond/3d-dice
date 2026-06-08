@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { themeToBoxConfig, type RollTheme } from '@lambersond/3d-dice-core'
-import { useDiceRenderer } from './use-dice-renderer'
+import { useDiceRenderer } from './dice-renderer-provider'
 
 export function useDiceTheme(theme: RollTheme): void {
   const renderer = useDiceRenderer()

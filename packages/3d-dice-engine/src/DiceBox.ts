@@ -39,6 +39,14 @@ type ThrowVectors = {
 // deferred clip resolves (skipped) instead of hanging the load chain.
 const AUDIO_LOAD_TIMEOUT_MS = 8000
 
+// Drag-to-flick tuning. Velocities are world units/sec, in the same scale as a
+// normal throw's boost. Below the move threshold a release counts as a tap.
+const DRAG_MOVE_THRESHOLD = 25
+const DRAG_GAIN = 1
+const DRAG_MAX_SPEED = 6000
+const DRAG_LAUNCH_Z = 250
+const RESET_DWELL_MS = 1200
+
 function describeWebGLSupport(): Record<string, unknown> {
   const info: Record<string, unknown> = {
     userAgent: typeof navigator === 'undefined' ? 'n/a' : navigator.userAgent,
@@ -104,6 +112,8 @@ const defaultConfig: DiceBoxConfig = {
   enableDiceSelection: false,
   onDiceHover: () => {},
   onDiceClick: () => {},
+  enableDiceDrag: false,
+  dragRemoval: { style: 'reset', dwellMs: RESET_DWELL_MS },
 }
 
 class DiceBox {
@@ -132,6 +142,8 @@ class DiceBox {
   enableDiceSelection!: boolean
   onDiceHover!: (data: DiceEventData | null) => void
   onDiceClick!: (data: DiceEventData) => void
+  enableDiceDrag!: boolean
+  dragRemoval!: RemovalOptions
 
   container: HTMLElement
   dimensions: THREE.Vector2
@@ -157,6 +169,16 @@ class DiceBox {
   private hoveredDice: DiceMesh | null = null
   private onMouseMoveBound?: (event: MouseEvent) => void
   private onMouseClickBound?: (event: MouseEvent) => void
+  private dragNdc?: THREE.Vector2
+  private tablePlane?: THREE.Plane
+  private dragging: DiceMesh | null = null
+  private dragRestZ = 0
+  private dragSamples: { x: number; y: number; t: number }[] = []
+  private onPointerDownBound?: (event: PointerEvent) => void
+  private onPointerMoveBound?: (event: PointerEvent) => void
+  private onPointerUpBound?: (event: PointerEvent) => void
+  private onResizeBound?: () => void
+  private disposed = false
   iteration = 0
   steps = 0
   dieIndex = 0
@@ -193,7 +215,13 @@ class DiceBox {
   DiceFactory: DiceFactory
 
   constructor(element_container: string, options: Partial<DiceBoxConfig> = {}) {
-    this.container = document.querySelector(element_container) as HTMLElement
+    const container = document.querySelector<HTMLElement>(element_container)
+    if (!container) {
+      throw new Error(
+        `[dice-engine] container not found for selector: ${element_container}`,
+      )
+    }
+    this.container = container
     this.dimensions = new THREE.Vector2(
       this.container.clientWidth,
       this.container.clientHeight,
@@ -280,22 +308,37 @@ class DiceBox {
     this.initialized = true
     this.renderer.render(this.scene, this.camera)
 
-    if (this.enableDiceSelection) this.enableSelection()
+    if (this.enableDiceSelection || this.enableDiceDrag) this.enableSelection()
   }
 
   private enableSelection(): void {
-    if (this.onMouseMoveBound) return
+    if (this.raycaster) return
     this.raycaster = new THREE.Raycaster()
     this.mouse = new THREE.Vector2()
-    this.onMouseMoveBound = (event: MouseEvent) => this.onMouseMove(event)
-    this.onMouseClickBound = (event: MouseEvent) => this.onMouseClick(event)
     // Listen on the window, not the container: core mounts the canvas inside a
     // full-viewport `pointer-events:none` overlay, so the element itself never
-    // receives pointer events. We hit-test against the dice and only swallow a
-    // click when it actually lands on a die (see onMouseClick), which keeps the
-    // app UI beneath the overlay fully interactive.
-    globalThis.addEventListener('mousemove', this.onMouseMoveBound)
-    globalThis.addEventListener('click', this.onMouseClickBound, true)
+    // receives pointer events. We hit-test against the dice and only swallow an
+    // event when it actually lands on a die, which keeps the app UI beneath the
+    // overlay fully interactive.
+    if (this.enableDiceSelection) {
+      this.onMouseMoveBound = (event: MouseEvent) => this.onMouseMove(event)
+      globalThis.addEventListener('mousemove', this.onMouseMoveBound)
+    }
+    if (this.enableDiceDrag) {
+      // The drag gesture owns tap-to-reroll too, so we use pointer events
+      // (mouse + touch) instead of a separate click listener.
+      this.dragNdc = new THREE.Vector2()
+      this.tablePlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
+      this.onPointerDownBound = (event: PointerEvent) => this.onPointerDown(event)
+      this.onPointerMoveBound = (event: PointerEvent) => this.onPointerMove(event)
+      this.onPointerUpBound = (event: PointerEvent) => this.onPointerUp(event)
+      globalThis.addEventListener('pointerdown', this.onPointerDownBound, true)
+      globalThis.addEventListener('pointermove', this.onPointerMoveBound, true)
+      globalThis.addEventListener('pointerup', this.onPointerUpBound, true)
+    } else if (this.enableDiceSelection) {
+      this.onMouseClickBound = (event: MouseEvent) => this.onMouseClick(event)
+      globalThis.addEventListener('click', this.onMouseClickBound, true)
+    }
   }
 
   private teardownSelection(): void {
@@ -303,9 +346,19 @@ class DiceBox {
       globalThis.removeEventListener('mousemove', this.onMouseMoveBound)
     if (this.onMouseClickBound)
       globalThis.removeEventListener('click', this.onMouseClickBound, true)
+    if (this.onPointerDownBound)
+      globalThis.removeEventListener('pointerdown', this.onPointerDownBound, true)
+    if (this.onPointerMoveBound)
+      globalThis.removeEventListener('pointermove', this.onPointerMoveBound, true)
+    if (this.onPointerUpBound)
+      globalThis.removeEventListener('pointerup', this.onPointerUpBound, true)
     this.onMouseMoveBound = undefined
     this.onMouseClickBound = undefined
+    this.onPointerDownBound = undefined
+    this.onPointerMoveBound = undefined
+    this.onPointerUpBound = undefined
     this.hoveredDice = null
+    this.dragging = null
   }
 
   private ensureSoundsLoaded(): void {
@@ -644,10 +697,11 @@ class DiceBox {
     }
 
     let frame: number | undefined
-    globalThis.addEventListener('resize', () => {
+    this.onResizeBound = () => {
       if (frame) globalThis.cancelAnimationFrame(frame)
       frame = globalThis.requestAnimationFrame(resize)
-    })
+    }
+    globalThis.addEventListener('resize', this.onResizeBound)
   }
 
   vectorRand({ x, y }: Vec2Like): Vec2Like {
@@ -1031,7 +1085,9 @@ class DiceBox {
       this.running = false
       this.rolling = false
       this.animstate = 'afterthrow'
-      this.onEmpty()
+      // Only "empty" when no dice remain — persisted dice drop their group but
+      // stay on the table, and onEmpty (which hides the overlay) must not fire.
+      if (this.diceList.length === 0) this.onEmpty()
       this.renderer.render(this.scene, this.camera)
       return
     }
@@ -1058,6 +1114,19 @@ class DiceBox {
         group.resolved = true
         group.resolve()
       }
+    }
+
+    // Persisting dispositions keep the dice in `diceList` and drop the group so
+    // the animation loop can idle: `none` leaves them where they landed (and
+    // records that spot as home); `reset` returns them home after a short dwell.
+    if (group.removal.style === 'none') {
+      for (const die of group.dice) this.recordPlacement(die)
+      return false
+    }
+    if (group.removal.style === 'reset') {
+      if (now - group.settledAt < group.removal.dwellMs) return true
+      for (const die of group.dice) this.resetToPlacement(die)
+      return false
     }
 
     if (!group.exiting && now - group.settledAt >= group.removal.dwellMs) {
@@ -1114,8 +1183,27 @@ class DiceBox {
     this.renderer.render(this.scene, this.camera)
 
     setTimeout(() => {
-      this.renderer.render(this.scene, this.camera)
+      if (!this.disposed) this.renderer.render(this.scene, this.camera)
     }, 100)
+  }
+
+  /**
+   * Tear the box down: stop the loop, drop all dice, detach listeners and the
+   * canvas, and release the WebGL context. Used when a renderer is unmounted so
+   * navigating between views does not leak canvases/listeners or stale dice.
+   */
+  dispose(): void {
+    this.disposed = true
+    this.running = false
+    this.rolling = false
+    this.teardownSelection()
+    if (this.onResizeBound) {
+      globalThis.removeEventListener('resize', this.onResizeBound)
+      this.onResizeBound = undefined
+    }
+    this.clearDice()
+    this.renderer?.domElement?.remove()
+    this.renderer?.dispose()
   }
 
   private resolveRemoval(removal?: RemovalOptions): ResolvedRemoval {
@@ -1150,6 +1238,39 @@ class DiceBox {
     if (die.body) this.world.removeBody(die.body)
   }
 
+  // Snapshot a settled die's resting transform as its home (for `reset`).
+  private recordPlacement(die: DiceMesh): void {
+    const p = die.body.position
+    const q = die.body.quaternion
+    die.placement = {
+      position: { x: p.x, y: p.y, z: p.z },
+      quaternion: { x: q.x, y: q.y, z: q.z, w: q.w },
+    }
+  }
+
+  // Send a die back to its recorded home, at rest. No-op if it has no home.
+  private resetToPlacement(die: DiceMesh): void {
+    const placement = die.placement
+    if (!placement) return
+    const { position, quaternion } = placement
+    die.rerolling = false
+    die.scale.setScalar(1)
+    for (const mat of die.material) mat.opacity = 1
+    die.body.type = CANNON.Body.KINEMATIC
+    die.body.velocity.setZero()
+    die.body.angularVelocity.setZero()
+    die.body.position.set(position.x, position.y, position.z)
+    die.body.quaternion.set(
+      quaternion.x,
+      quaternion.y,
+      quaternion.z,
+      quaternion.w,
+    )
+    die.body.sleep()
+    die.position.set(position.x, position.y, position.z)
+    die.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w)
+  }
+
   private cancelGroups(): void {
     for (const group of this.throwGroups) {
       for (const die of group.dice) {
@@ -1167,15 +1288,17 @@ class DiceBox {
   }
 
   private dieResult(die: DiceMesh, id: number): DiceResult {
-    const last = die.result.at(-1)!
+    // A die may have no stored result yet if a group is force-resolved before
+    // it settles (e.g. clearDice/dispose mid-roll); fall back rather than throw.
+    const last = die.result.at(-1)
     return {
       type: die.shape,
       sides: Number.parseInt(die.shape.substring(1)),
       id,
       dieId: die.notation.index,
-      value: last.value,
-      label: last.label,
-      reason: last.reason,
+      value: last?.value ?? 0,
+      label: last?.label,
+      reason: last?.reason ?? 'unsettled',
     }
   }
 
@@ -1216,7 +1339,12 @@ class DiceBox {
   }
 
   private onMouseMove(event: MouseEvent): void {
-    if (!this.enableDiceSelection || this.diceList.length === 0) return
+    if (
+      !this.enableDiceSelection ||
+      this.dragging ||
+      this.diceList.length === 0
+    )
+      return
     const { raycaster, mouse } = this
     if (!raycaster || !mouse) return
 
@@ -1260,6 +1388,130 @@ class DiceBox {
     this.dispatchDiceEvent('diceClick', data)
   }
 
+  private pointerNdc(clientX: number, clientY: number): THREE.Vector2 {
+    const ndc = this.dragNdc!
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1
+    ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1
+    return ndc
+  }
+
+  private pickDie(clientX: number, clientY: number): DiceMesh | undefined {
+    const raycaster = this.raycaster
+    if (!raycaster) return undefined
+    raycaster.setFromCamera(this.pointerNdc(clientX, clientY), this.camera)
+    return raycaster
+      .intersectObjects(this.diceList)
+      .map(intersection => intersection.object as DiceMesh)
+      .find(die => this.isSelectableDie(die))
+  }
+
+  // Project a pointer onto the table (z=0) plane to a world (x,y) point.
+  private pointerToTable(
+    clientX: number,
+    clientY: number,
+  ): { x: number; y: number } | null {
+    const raycaster = this.raycaster
+    const plane = this.tablePlane
+    if (!raycaster || !plane) return null
+    raycaster.setFromCamera(this.pointerNdc(clientX, clientY), this.camera)
+    const hit = raycaster.ray.intersectPlane(plane, new THREE.Vector3())
+    return hit ? { x: hit.x, y: hit.y } : null
+  }
+
+  private onPointerDown(event: PointerEvent): void {
+    if (!this.enableDiceDrag || event.button !== 0 || this.diceList.length === 0)
+      return
+    const die = this.pickDie(event.clientX, event.clientY)
+    if (!die) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    this.dragging = die
+    this.dragRestZ = die.body.position.z
+    const point = this.pointerToTable(event.clientX, event.clientY)
+    this.dragSamples = point
+      ? [{ x: point.x, y: point.y, t: event.timeStamp }]
+      : []
+
+    // Hold the die still under the cursor while it is dragged.
+    die.rerolling = false
+    die.body.type = CANNON.Body.KINEMATIC
+    die.body.velocity.setZero()
+    die.body.angularVelocity.setZero()
+
+    // Drop any hover popover the moment a drag starts.
+    if (this.hoveredDice) {
+      this.hoveredDice = null
+      this.onDiceHover(null)
+      this.dispatchDiceEvent('diceHover', null)
+    }
+  }
+
+  private onPointerMove(event: PointerEvent): void {
+    const die = this.dragging
+    if (!die) return
+    event.preventDefault()
+    event.stopPropagation()
+    const point = this.pointerToTable(event.clientX, event.clientY)
+    if (!point) return
+    die.body.position.set(point.x, point.y, this.dragRestZ)
+    die.position.set(point.x, point.y, this.dragRestZ)
+    this.dragSamples.push({ x: point.x, y: point.y, t: event.timeStamp })
+    if (this.dragSamples.length > 6) this.dragSamples.shift()
+    // Render directly so the held die tracks the cursor even while the physics
+    // loop is idle (a persistent tray's dice are asleep between flicks).
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  private onPointerUp(event: PointerEvent): void {
+    const die = this.dragging
+    if (!die) return
+    event.preventDefault()
+    event.stopPropagation()
+    this.dragging = null
+
+    const id = this.diceList.indexOf(die)
+    if (id < 0) return
+
+    const flick = this.flickVelocity(this.dragSamples)
+    this.dragSamples = []
+    // Disposition is configured per box: persistent boxes return the die home,
+    // transient boxes let it leave on the normal exit animation.
+    const removal = this.dragRemoval
+    // A flick launches in the drag direction; a tap (no flick) uses the default
+    // straight-up reroll velocity.
+    void (flick
+      ? this.reroll([id], {
+          velocity: { x: flick.x, y: flick.y, z: DRAG_LAUNCH_Z },
+          removal,
+        })
+      : this.reroll([id], { removal }))
+  }
+
+  // Average drag velocity over the recent samples, in world units/sec. Returns
+  // null when the pointer barely moved (treat as a tap, not a flick).
+  private flickVelocity(
+    samples: { x: number; y: number; t: number }[],
+  ): { x: number; y: number } | null {
+    if (samples.length < 2) return null
+    const first = samples[0]
+    const last = samples.at(-1)!
+    if (Math.hypot(last.x - first.x, last.y - first.y) < DRAG_MOVE_THRESHOLD) {
+      return null
+    }
+    const dt = Math.max((last.t - first.t) / 1000, 1 / 120)
+    let vx = ((last.x - first.x) / dt) * DRAG_GAIN
+    let vy = ((last.y - first.y) / dt) * DRAG_GAIN
+    const speed = Math.hypot(vx, vy)
+    if (speed > DRAG_MAX_SPEED) {
+      const scale = DRAG_MAX_SPEED / speed
+      vx *= scale
+      vy *= scale
+    }
+    return { x: vx, y: vy }
+  }
+
   getDiceResults(): RollResults
   getDiceResults(id: number): DiceResult
   getDiceResults(id?: number): RollResults | DiceResult {
@@ -1279,8 +1531,10 @@ class DiceBox {
       let setTotal = 0
       const rolls: DiceResult[] = []
       for (let index = counter; index <= endCount; index++) {
-        const last = this.diceList[counter].result.at(-1)!
-        if (last.reason === 'remove') {
+        const die = this.diceList[counter]
+        const last = die?.result.at(-1)
+        // Skip dice with no settled value (e.g. force-resolved on teardown).
+        if (!last || last.reason === 'remove') {
           counter++
           continue
         }
@@ -1288,7 +1542,7 @@ class DiceBox {
           type: set.type,
           sides: Number.parseInt(set.type.substring(1)),
           id: counter,
-          dieId: this.diceList[counter].notation.index,
+          dieId: die.notation.index,
           value: last.value,
           label: last.label,
           reason: last.reason,
@@ -1376,7 +1630,12 @@ class DiceBox {
 
   async reroll(
     diceIdArray: number[],
-    options: { removal?: RemovalOptions } = {},
+    options: {
+      removal?: RemovalOptions
+      velocity?: Vec3Like
+      position?: Vec3Like
+      angular?: Vec3Like
+    } = {},
   ): Promise<DiceResult[]> {
     this.iteration = 0
     this.last_time = 0
@@ -1388,6 +1647,8 @@ class DiceBox {
     // counting down to removal and undo any in-progress exit, so the new throw
     // alone governs their lifecycle (otherwise the old group still removes them).
     this.detachFromGroups(dice)
+    const velocity = options.velocity ?? { x: 0, y: 0, z: 3000 }
+    const angular = options.angular ?? { x: 25, y: 25, z: 25 }
     for (const die of dice) {
       die.scale.setScalar(1)
       for (const mat of die.material) mat.opacity = 1
@@ -1396,8 +1657,15 @@ class DiceBox {
       die.body.collisionResponse = true
       die.body.wakeUp()
       die.body.type = CANNON.Body.DYNAMIC
-      die.body.angularVelocity = new CANNON.Vec3(25, 25, 25)
-      die.body.velocity = new CANNON.Vec3(0, 0, 3000)
+      if (options.position) {
+        die.body.position.set(
+          options.position.x,
+          options.position.y,
+          options.position.z,
+        )
+      }
+      die.body.angularVelocity = new CANNON.Vec3(angular.x, angular.y, angular.z)
+      die.body.velocity = new CANNON.Vec3(velocity.x, velocity.y, velocity.z)
     }
     return new Promise<DiceResult[]>(resolve => {
       this.throwGroups.push(

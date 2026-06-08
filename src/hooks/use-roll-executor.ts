@@ -16,7 +16,9 @@ import type { RollEntry, RollerInfo } from '@/types/roll'
 
 const FRESH_ROLL_WINDOW_MS = 30_000
 const ANIMATION_TIMEOUT_MS = 30_000
-const DICE_REMOVAL: RemovalOptions = { style: 'shrink', dwellMs: 3000 }
+// Transient default; persistent examples pass { style: 'none' } so rolled dice
+// stay on the table.
+const DEFAULT_REMOVAL: RemovalOptions = { style: 'shrink', dwellMs: 2000 }
 
 type Options = {
   userId: string
@@ -25,6 +27,8 @@ type Options = {
   onLocalResult: (result: RollEntry) => void
   onSettled?: (result: RollEntry) => void
   deterministic?: boolean
+  /** How rolled dice leave the table; pass `{ style: 'none' }` to persist. */
+  removal?: RemovalOptions
 }
 
 export function useRollExecutor({
@@ -34,11 +38,10 @@ export function useRollExecutor({
   onLocalResult,
   onSettled,
   deterministic = true,
+  removal = DEFAULT_REMOVAL,
 }: Options) {
   const { theme } = useDicePreferences()
-  // This is the first/highest useDiceRenderer call, so its config seeds the
-  // shared renderer: enable pointer selection so dice can be hovered/clicked.
-  const renderer = useDiceRenderer({ enableDiceSelection: true })
+  const renderer = useDiceRenderer()
   const [pendingRolls, setPendingRolls] = useState(0)
   const busy = pendingRolls > 0
 
@@ -58,13 +61,13 @@ export function useRollExecutor({
       await withTimeout(
         renderer.roll(toDiceBoxNotation(result), {
           theme: result.theme ? themeToBoxConfig(result.theme) : undefined,
-          removal: DICE_REMOVAL,
+          removal,
         }),
         ANIMATION_TIMEOUT_MS,
         'dice animation',
       )
     },
-    [renderer],
+    [renderer, removal],
   )
 
   const throwDice = useCallback<PhysicalThrow>(
@@ -74,12 +77,12 @@ export function useRollExecutor({
           theme: themeRef.current
             ? themeToBoxConfig(themeRef.current)
             : undefined,
-          removal: DICE_REMOVAL,
+          removal,
         }),
         ANIMATION_TIMEOUT_MS,
         'dice animation',
       ),
-    [renderer],
+    [renderer, removal],
   )
 
   const requestRoll = useCallback(

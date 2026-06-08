@@ -1,9 +1,12 @@
 import type {
   DiceRendererConfig,
   DieEvent,
+  DieRoll,
   RemovalOptions,
   RolledDie,
 } from './types'
+
+type Vec3 = { x: number; y: number; z: number }
 
 const DEFAULT_CONTAINER_ID = 'dice-canvas-threejs'
 const INIT_TIMEOUT_MS = 15_000
@@ -39,6 +42,28 @@ function landedDice(settled: unknown): RolledDie[] {
     .map(die => ({ value: die.value, dieId: die.dieId }))
 }
 
+function toDieRolls(settled: unknown): DieRoll[] {
+  if (!Array.isArray(settled)) return []
+  const rolls: DieRoll[] = []
+  for (const item of settled) {
+    const d = item as Partial<DieRoll>
+    if (
+      typeof d.dieId === 'number' &&
+      typeof d.value === 'number' &&
+      typeof d.sides === 'number' &&
+      typeof d.type === 'string'
+    ) {
+      rolls.push({
+        dieId: d.dieId,
+        value: d.value,
+        sides: d.sides,
+        type: d.type,
+      })
+    }
+  }
+  return rolls
+}
+
 function isLowPowerDevice(): boolean {
   if (typeof navigator === 'undefined') return false
   const coarse =
@@ -61,10 +86,17 @@ type DiceBoxInstance = {
   add: (notation: string, options?: BoxRollOptions) => Promise<unknown>
   reroll?: (
     ids: number[],
-    options?: { removal?: RemovalOptions },
+    options?: {
+      removal?: RemovalOptions
+      velocity?: Vec3
+      position?: Vec3
+      angular?: Vec3
+    },
   ) => Promise<unknown>
+  remove?: (ids: number[]) => Promise<unknown>
   updateConfig?: (config: Record<string, unknown>) => Promise<void>
   clearDice?: () => void
+  dispose?: () => void
   renderer?: { domElement?: HTMLCanvasElement }
 }
 
@@ -74,10 +106,14 @@ export class DiceRenderer {
   private box: DiceBoxInstance | undefined
   private contextLost = false
   private building = false
+  // Bumped by dispose() to cancel an in-flight build whose container/box would
+  // otherwise be torn down underneath it (e.g. navigating away mid-build).
+  private generation = 0
   private spawnChain: Promise<void> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
   private readonly hoverSubscribers = new Set<(die: DieEvent | null) => void>()
   private readonly clickSubscribers = new Set<(die: DieEvent) => void>()
+  private readonly rerollSubscribers = new Set<(rolls: DieRoll[]) => void>()
   private visibilityBound = false
 
   constructor(config: DiceRendererConfig = {}) {
@@ -117,6 +153,43 @@ export class DiceRenderer {
     return () => {
       this.clickSubscribers.delete(handler)
     }
+  }
+
+  /**
+   * Register a handler that fires whenever dice settle from a reroll or flick,
+   * with their new face values. Covers both tap and drag rerolls. Returns an
+   * unsubscribe.
+   */
+  onDieReroll(handler: (rolls: DieRoll[]) => void): () => void {
+    this.rerollSubscribers.add(handler)
+    return () => {
+      this.rerollSubscribers.delete(handler)
+    }
+  }
+
+  /** Remove every die currently on the table. */
+  clear(): void {
+    this.box?.clearDice?.()
+  }
+
+  /** Take specific dice off the table by id (e.g. a "set aside" action). */
+  async remove(ids: number[]): Promise<void> {
+    const box = this.box
+    if (!box?.remove || this.contextLost || ids.length === 0) return
+    await box.remove(ids)
+  }
+
+  /**
+   * Tear down the engine box and remove the overlay element this renderer
+   * created. Call when the renderer is no longer needed (e.g. on unmount) so
+   * navigating away does not leak canvases/listeners or leave stale dice.
+   */
+  dispose(): void {
+    this.generation += 1
+    this.box?.dispose?.()
+    this.getContainer()?.remove()
+    this.box = undefined
+    this.building = false
   }
 
   ensure(): void {
@@ -229,9 +302,13 @@ export class DiceRenderer {
   private async build(): Promise<void> {
     if (this.box || this.building) return
     this.building = true
+    const generation = this.generation
     try {
       const container = this.ensureContainer()
       const ready = await this.waitForDimensions(container)
+      // Bail if disposed (e.g. navigated away) while we awaited — the container
+      // and box would be torn down underneath us.
+      if (generation !== this.generation) return
       if (!ready) {
         console.error(
           '[dice] Container has zero dimensions; renderer not built (retries when visible).',
@@ -244,11 +321,16 @@ export class DiceRenderer {
         return
       }
       const { default: DiceBox } = await import('@lambersond/3d-dice-engine')
+      if (generation !== this.generation) return
       const box = new DiceBox(
         `#${this.containerId}`,
         this.buildBoxConfig(),
       ) as unknown as DiceBoxInstance
       await withTimeout(box.initialize(), INIT_TIMEOUT_MS, 'DiceBox.initialize')
+      if (generation !== this.generation) {
+        box.dispose?.()
+        return
+      }
       this.box = box
       this.contextLost = false
       this.attachContextLossHandlers(box)
@@ -262,7 +344,9 @@ export class DiceRenderer {
         height: el?.clientHeight,
       })
     } finally {
-      this.building = false
+      // Only the build that still owns the current generation clears the flag,
+      // so a superseded build doesn't stomp a newer one's `building` state.
+      if (generation === this.generation) this.building = false
     }
   }
 
@@ -284,11 +368,17 @@ export class DiceRenderer {
         if (container) container.style.opacity = '0'
       },
       enableDiceSelection: c.enableDiceSelection ?? false,
+      enableDiceDrag: c.enableDiceDrag ?? false,
+      ...(c.dragRemoval ? { dragRemoval: c.dragRemoval } : {}),
       onDiceHover: (data: DieEvent | null) => {
         for (const cb of this.hoverSubscribers) cb(data)
       },
       onDiceClick: (data: DieEvent) => {
         for (const cb of this.clickSubscribers) cb(data)
+      },
+      onRerollComplete: (results: unknown) => {
+        const rolls = toDieRolls(results)
+        for (const cb of this.rerollSubscribers) cb(rolls)
       },
     }
   }

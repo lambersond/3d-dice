@@ -1,5 +1,5 @@
 export * from './use-tray'
-export * from './use-dice-renderer'
+export * from './dice-renderer-provider'
 export * from './use-dice-theme'
 export * from './use-die-events'
 export * from './dice-preferences'
