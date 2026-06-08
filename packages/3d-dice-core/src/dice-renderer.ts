@@ -1,4 +1,9 @@
-import type { DiceRendererConfig, RemovalOptions } from './types'
+import type {
+  DiceRendererConfig,
+  DieEvent,
+  RemovalOptions,
+  RolledDie,
+} from './types'
 
 const DEFAULT_CONTAINER_ID = 'dice-canvas-threejs'
 const INIT_TIMEOUT_MS = 15_000
@@ -23,11 +28,15 @@ function userAgent(): string {
   return typeof navigator === 'undefined' ? 'n/a' : navigator.userAgent
 }
 
-function landedValues(settled: unknown): number[] {
+function landedDice(settled: unknown): RolledDie[] {
   if (!Array.isArray(settled)) return []
   return settled
-    .map(die => (die as { value?: unknown })?.value)
-    .filter((v): v is number => typeof v === 'number')
+    .map(die => die as { value?: unknown; dieId?: unknown })
+    .filter(
+      (die): die is { value: number; dieId: number } =>
+        typeof die.value === 'number' && typeof die.dieId === 'number',
+    )
+    .map(die => ({ value: die.value, dieId: die.dieId }))
 }
 
 function isLowPowerDevice(): boolean {
@@ -50,6 +59,10 @@ type DiceBoxInstance = {
   initialize: () => Promise<void>
   roll: (notation: string, options?: BoxRollOptions) => Promise<unknown>
   add: (notation: string, options?: BoxRollOptions) => Promise<unknown>
+  reroll?: (
+    ids: number[],
+    options?: { removal?: RemovalOptions },
+  ) => Promise<unknown>
   updateConfig?: (config: Record<string, unknown>) => Promise<void>
   clearDice?: () => void
   renderer?: { domElement?: HTMLCanvasElement }
@@ -63,6 +76,8 @@ export class DiceRenderer {
   private building = false
   private spawnChain: Promise<void> = Promise.resolve()
   private readonly subscribers = new Set<() => void>()
+  private readonly hoverSubscribers = new Set<(die: DieEvent | null) => void>()
+  private readonly clickSubscribers = new Set<(die: DieEvent) => void>()
   private visibilityBound = false
 
   constructor(config: DiceRendererConfig = {}) {
@@ -81,6 +96,29 @@ export class DiceRenderer {
     }
   }
 
+  /**
+   * Register a handler for pointer hover over a visible die (fires with the die,
+   * or null when the pointer leaves all dice). Requires
+   * `enableDiceSelection: true` in the renderer config. Returns an unsubscribe.
+   */
+  onDieHover(handler: (die: DieEvent | null) => void): () => void {
+    this.hoverSubscribers.add(handler)
+    return () => {
+      this.hoverSubscribers.delete(handler)
+    }
+  }
+
+  /**
+   * Register a handler for clicks on a visible die. Requires
+   * `enableDiceSelection: true` in the renderer config. Returns an unsubscribe.
+   */
+  onDieClick(handler: (die: DieEvent) => void): () => void {
+    this.clickSubscribers.add(handler)
+    return () => {
+      this.clickSubscribers.delete(handler)
+    }
+  }
+
   ensure(): void {
     this.bindVisibility()
     if (!this.box && !this.building) this.build().catch(() => {})
@@ -95,7 +133,7 @@ export class DiceRenderer {
   async roll(
     notation: string,
     options?: { theme?: Record<string, unknown>; removal?: RemovalOptions },
-  ): Promise<number[]> {
+  ): Promise<RolledDie[]> {
     const box = this.box
     if (!box || this.contextLost) return []
 
@@ -121,10 +159,29 @@ export class DiceRenderer {
     })
 
     try {
-      return landedValues(await settled)
+      return landedDice(await settled)
     } finally {
       releaseSpawn()
     }
+  }
+
+  /**
+   * Re-throw dice that are already on the table, by their `id` (the index
+   * carried on a {@link DieEvent} from onDieClick/onDieHover). Resolves with the
+   * dice's new face values. `removal` controls how long the rerolled dice dwell
+   * before leaving, matching the dwell used on the original throw.
+   */
+  async reroll(
+    ids: number[],
+    options?: { removal?: RemovalOptions },
+  ): Promise<RolledDie[]> {
+    const box = this.box
+    if (!box?.reroll || this.contextLost || ids.length === 0) return []
+
+    const container = this.getContainer()
+    if (container) container.style.opacity = '1'
+
+    return landedDice(await box.reroll(ids, { removal: options?.removal }))
   }
 
   private notify(): void {
@@ -140,13 +197,19 @@ export class DiceRenderer {
     if (!el) {
       el = document.createElement('div')
       el.id = this.containerId
-      el.style.position = 'fixed'
-      el.style.top = '0'
-      el.style.left = '0'
-      el.style.width = '100vw'
-      el.style.height = '100vh'
-      el.style.pointerEvents = 'none'
-      el.style.zIndex = '100000'
+      // Default full-viewport, click-through overlay; `overlay` config can
+      // override any field (e.g. width/height + inset) to confine dice to a
+      // bounded tray. Apps that pre-render the element keep full control.
+      Object.assign(el.style, {
+        position: 'fixed',
+        top: '0',
+        left: '0',
+        width: '100vw',
+        height: '100vh',
+        pointerEvents: 'none',
+        zIndex: '100000',
+        ...this.config.overlay,
+      })
       document.body.append(el)
     }
     return el
@@ -219,6 +282,13 @@ export class DiceRenderer {
       onEmpty: () => {
         const container = this.getContainer()
         if (container) container.style.opacity = '0'
+      },
+      enableDiceSelection: c.enableDiceSelection ?? false,
+      onDiceHover: (data: DieEvent | null) => {
+        for (const cb of this.hoverSubscribers) cb(data)
+      },
+      onDiceClick: (data: DieEvent) => {
+        for (const cb of this.clickSubscribers) cb(data)
       },
     }
   }

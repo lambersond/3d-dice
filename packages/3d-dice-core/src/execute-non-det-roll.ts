@@ -1,14 +1,18 @@
+import { combineD100, dieSlotResult } from './reroll'
 import type {
   Advantage,
   DiePool,
   DieSides,
+  DieSlot,
   RollRequest,
   RollResult,
+  RolledDie,
 } from './types'
 
-export type PhysicalThrow = (notation: string) => Promise<number[]>
+export type PhysicalThrow = (notation: string) => Promise<RolledDie[]>
 
 const EXPLOSION_CAP = 50
+const MISSING_DIE: RolledDie = { value: 0, dieId: -1 }
 
 type PoolPlan = {
   sides: DieSides
@@ -96,35 +100,46 @@ function planPool(
   }
 }
 
+// Map the physical dice that landed for one kept die into a slot, preserving
+// each die's stable id so a later reroll can update the right value.
+function slotForDie(
+  plan: PoolPlan,
+  advantage: Advantage | undefined,
+  base: RolledDie[],
+  i: number,
+): DieSlot {
+  if (plan.kind === 'adv') {
+    const a = base[2 * i] ?? MISSING_DIE
+    const b = base[2 * i + 1] ?? MISSING_DIE
+    return { kind: advantage === 'dis' ? 'dis' : 'adv', parts: [a, b] }
+  }
+  if (plan.kind === 'd100') {
+    const tens = base[i] ?? MISSING_DIE
+    const ones = base[plan.count + i] ?? MISSING_DIE
+    return { kind: 'd100', parts: [tens, ones] }
+  }
+  return { kind: 'plain', parts: [base[i] ?? MISSING_DIE] }
+}
+
 async function buildPool(
   plan: PoolPlan,
-  base: number[],
+  base: RolledDie[],
   advantage: Advantage | undefined,
   exploding: boolean,
   throwDice: PhysicalThrow,
 ): Promise<DiePool> {
-  const { sides, count, kind } = plan
+  const { sides, count } = plan
+  const slots: DieSlot[] = []
   const rolls: number[][] = []
   const kept: number[] = []
   const explosions: number[][] = []
   let anyExplosion = false
 
   for (let i = 0; i < count; i += 1) {
-    let keptValue: number
-    if (kind === 'adv') {
-      const a = base[2 * i] ?? 0
-      const b = base[2 * i + 1] ?? 0
-      rolls.push([a, b])
-      keptValue = advantage === 'adv' ? Math.max(a, b) : Math.min(a, b)
-    } else if (kind === 'd100') {
-      const value = combineD100(base[i] ?? 0, base[count + i] ?? 0)
-      rolls.push([value])
-      keptValue = value
-    } else {
-      const value = base[i] ?? 0
-      rolls.push([value])
-      keptValue = value
-    }
+    const slot = slotForDie(plan, advantage, base, i)
+    const { kept: keptValue, rolls: dieRolls } = dieSlotResult(slot)
+    slots.push(slot)
+    rolls.push(dieRolls)
     kept.push(keptValue)
 
     const chain = exploding
@@ -136,6 +151,9 @@ async function buildPool(
 
   const pool: DiePool = { sides, count, rolls, kept }
   if (anyExplosion) pool.explosions = explosions
+  // Exploding rerolls are not yet supported, so omit the reroll breakdown to
+  // signal those dice should not rewrite the logged result.
+  if (!exploding) pool.slots = slots
   return pool
 }
 
@@ -160,13 +178,8 @@ async function rollOne(
 ): Promise<number> {
   if (sides === 100) {
     const landed = await throwDice('1d100+1d10')
-    return combineD100(landed[0] ?? 0, landed[1] ?? 0)
+    return combineD100(landed[0]?.value ?? 0, landed[1]?.value ?? 0)
   }
   const landed = await throwDice(`1d${sides}`)
-  return landed[0] ?? 0
-}
-
-function combineD100(tens: number, ones: number): number {
-  const value = (tens % 100) + (ones % 10)
-  return value === 0 ? 100 : value
+  return landed[0]?.value ?? 0
 }

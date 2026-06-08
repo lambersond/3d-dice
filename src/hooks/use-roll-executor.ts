@@ -16,7 +16,7 @@ import type { RollEntry, RollerInfo } from '@/types/roll'
 
 const FRESH_ROLL_WINDOW_MS = 30_000
 const ANIMATION_TIMEOUT_MS = 30_000
-const DICE_REMOVAL: RemovalOptions = { style: 'shrink', dwellMs: 1000 }
+const DICE_REMOVAL: RemovalOptions = { style: 'shrink', dwellMs: 3000 }
 
 type Options = {
   userId: string
@@ -36,7 +36,9 @@ export function useRollExecutor({
   deterministic = true,
 }: Options) {
   const { theme } = useDicePreferences()
-  const renderer = useDiceRenderer()
+  // This is the first/highest useDiceRenderer call, so its config seeds the
+  // shared renderer: enable pointer selection so dice can be hovered/clicked.
+  const renderer = useDiceRenderer({ enableDiceSelection: true })
   const [pendingRolls, setPendingRolls] = useState(0)
   const busy = pendingRolls > 0
 

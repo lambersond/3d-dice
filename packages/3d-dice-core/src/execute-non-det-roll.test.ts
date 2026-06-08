@@ -7,9 +7,11 @@ function scripted(responses: number[][]): {
 } {
   const queue = [...responses]
   const calls: string[] = []
+  let nextId = 0
   const throwDice: PhysicalThrow = notation => {
     calls.push(notation)
-    return Promise.resolve(queue.shift() ?? [])
+    const values = queue.shift() ?? []
+    return Promise.resolve(values.map(value => ({ value, dieId: nextId++ })))
   }
   return { throwDice, calls }
 }

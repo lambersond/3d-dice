@@ -6,6 +6,7 @@ import {
   localStoragePreferences,
 } from '@lambersond/3d-dice-react'
 import Image from 'next/image'
+import { DiceInteractionLayer } from './dice-interaction-layer'
 import { RoomView } from './room-view'
 import { DicePreferencesButton } from '@/components/dice-preferences'
 import { usePersistedChats } from '@/hooks/use-persisted-chats'
@@ -28,9 +29,11 @@ export function LonelyRoom({ userId }: Readonly<{ userId: string }>) {
 
 function LonelyRoomInner({ userId }: Readonly<{ userId: string }>) {
   const { profile } = useUserProfile()
-  const { rolls, append: appendRoll } = usePersistedRolls(
-    'dice-log:rolls:lonely',
-  )
+  const {
+    rolls,
+    append: appendRoll,
+    applyReroll,
+  } = usePersistedRolls('dice-log:rolls:lonely')
   const { chats, append: appendChat } = usePersistedChats('3d-dice:solo')
   const { requestRoll, busy } = useRollExecutor({
     userId,
@@ -52,15 +55,18 @@ function LonelyRoomInner({ userId }: Readonly<{ userId: string }>) {
   )
 
   return (
-    <RoomView
-      userId={userId}
-      rolls={rolls}
-      chats={chats}
-      onRollRequest={requestRoll}
-      onSendMessage={handleSendMessage}
-      disabled={busy}
-      header={<LonelyHeader />}
-    />
+    <>
+      <RoomView
+        userId={userId}
+        rolls={rolls}
+        chats={chats}
+        onRollRequest={requestRoll}
+        onSendMessage={handleSendMessage}
+        disabled={busy}
+        header={<LonelyHeader />}
+      />
+      <DiceInteractionLayer onReroll={applyReroll} />
+    </>
   )
 }
 

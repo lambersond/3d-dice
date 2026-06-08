@@ -8,6 +8,28 @@ export type DiePool = {
   rolls: number[][]
   kept: number[]
   explosions?: number[][]
+  /**
+   * Per-kept-die breakdown of the physical dice that produced it, carrying each
+   * die's stable id so a later reroll can update the right value. Present only
+   * for non-exploding rolls thrown physically (see executeNonDetRoll); absent
+   * for exploding or purely deterministic rolls.
+   */
+  slots?: DieSlot[]
+}
+
+/** A single physical die: its current face `value` and stable engine `dieId`. */
+export type RolledDie = {
+  value: number
+  dieId: number
+}
+
+export type DieSlotKind = 'plain' | 'adv' | 'dis' | 'd100'
+
+/** How a kept value is derived from one or more physical dice. */
+export type DieSlot = {
+  kind: DieSlotKind
+  /** plain: [die]; adv/dis: [a, b]; d100: [tens, ones]. */
+  parts: RolledDie[]
 }
 
 export type RollRequest = {
@@ -86,4 +108,46 @@ export type DiceRendererConfig = {
   lightIntensity?: number
   strength?: number
   shadows?: boolean
+  /** Detect hover/click on visible dice; register handlers via onDieHover/onDieClick. */
+  enableDiceSelection?: boolean
+  /** CSS overrides for the auto-created overlay container (see DiceOverlayConfig). */
+  overlay?: DiceOverlayConfig
+}
+
+/**
+ * CSS overrides for the overlay container DiceRenderer creates. Unset fields
+ * keep the default full-viewport, click-through overlay; supply a subset (e.g.
+ * width/height plus inset) to confine the dice to a bounded tray area. Ignored
+ * when the app pre-renders its own container element by id.
+ */
+export type DiceOverlayConfig = {
+  position?: string
+  top?: string
+  left?: string
+  right?: string
+  bottom?: string
+  width?: string
+  height?: string
+  zIndex?: string
+  pointerEvents?: string
+}
+
+/**
+ * A single die plus where it sits, passed to onDieHover/onDieClick handlers.
+ * `id` is the die's index in the live tray (the same handle the engine's
+ * reroll/remove accept); `position` is the world-space center; `screenPosition`
+ * is that point projected to canvas pixels.
+ */
+export type DieEvent = {
+  /** Index in the live tray at event time (use with reroll/remove). */
+  id: number
+  /** Stable per-die id (survives rerolls); use this to track a die over time. */
+  dieId: number
+  type: string
+  sides: number
+  value: number
+  reason: string
+  position: { x: number; y: number; z: number }
+  screenPosition: { x: number; y: number }
+  scale: number
 }

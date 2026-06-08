@@ -1,9 +1,21 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { applyRerollToResult } from '@lambersond/3d-dice-core'
 import type { RollEntry } from '@/types/roll'
 
 const DEFAULT_MAX = 200
+
+// Whether a logged roll contains the physical die with this stable id (only
+// non-exploding physical rolls carry the `slots` breakdown that records it).
+function rollOwnsDie(entry: RollEntry, dieId: number): boolean {
+  for (const pool of entry.pools) {
+    for (const slot of pool.slots ?? []) {
+      if (slot.parts.some(part => part.dieId === dieId)) return true
+    }
+  }
+  return false
+}
 
 const isRollEntry = (value: unknown): value is RollEntry => {
   if (typeof value !== 'object' || value === null) return false
@@ -73,5 +85,17 @@ export function usePersistedRolls(
     setRolls([])
   }, [])
 
-  return { rolls, append, clear }
+  // Adopt a rerolled die's new value into whichever logged roll owns it
+  // (matched by the die's stable id), recomputing that roll's kept and total.
+  const applyReroll = useCallback((dieId: number, value: number) => {
+    setRolls(prev =>
+      prev.map(entry =>
+        rollOwnsDie(entry, dieId)
+          ? applyRerollToResult(entry, [{ dieId, value }])
+          : entry,
+      ),
+    )
+  }, [])
+
+  return { rolls, append, clear, applyReroll }
 }

@@ -221,10 +221,24 @@ export interface NotationLike {
 export interface DiceResult {
   type: string
   sides: number
+  /** Index in the live `diceList` at report time (shifts as dice are removed). */
   id: number
+  /** Stable per-die id (survives rerolls); use this to track a die over time. */
+  dieId: number
   value: number
   label: unknown
   reason: string
+}
+
+/**
+ * A single die plus where it sits, emitted by the hover/click handlers when
+ * {@link DiceBoxConfig.enableDiceSelection} is on. `position` is the world-space
+ * center; `screenPosition` is that point projected to canvas pixels.
+ */
+export interface DiceEventData extends DiceResult {
+  position: { x: number; y: number; z: number }
+  screenPosition: { x: number; y: number }
+  scale: number
 }
 
 /** One notation set's aggregated result. */
@@ -268,4 +282,10 @@ export interface DiceBoxConfig {
   onRemoveDiceComplete: (results: DiceResult[]) => void
   /** Fires when the table empties via timed removal (not an explicit clear). */
   onEmpty: () => void
+  /** Attach pointer listeners so hover/click on visible dice are detected. */
+  enableDiceSelection: boolean
+  /** Fires with the die under the pointer, or null when the pointer leaves all dice. */
+  onDiceHover: (data: DiceEventData | null) => void
+  /** Fires when a visible die is clicked. */
+  onDiceClick: (data: DiceEventData) => void
 }

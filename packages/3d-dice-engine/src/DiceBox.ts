@@ -10,6 +10,7 @@ import type {
   ColorData,
   DiceBody,
   DiceBoxConfig,
+  DiceEventData,
   DiceMesh,
   DiceResult,
   Display,
@@ -100,6 +101,9 @@ const defaultConfig: DiceBoxConfig = {
   onAddDiceComplete: () => {},
   onRemoveDiceComplete: () => {},
   onEmpty: () => {},
+  enableDiceSelection: false,
+  onDiceHover: () => {},
+  onDiceClick: () => {},
 }
 
 class DiceBox {
@@ -125,6 +129,9 @@ class DiceBox {
   onAddDiceComplete!: (results: DiceResult[]) => void
   onRemoveDiceComplete!: (results: DiceResult[]) => void
   onEmpty!: () => void
+  enableDiceSelection!: boolean
+  onDiceHover!: (data: DiceEventData | null) => void
+  onDiceClick!: (data: DiceEventData) => void
 
   container: HTMLElement
   dimensions: THREE.Vector2
@@ -145,6 +152,11 @@ class DiceBox {
   last_time = 0
   running: number | boolean = false
   rolling = false
+  private raycaster?: THREE.Raycaster
+  private mouse?: THREE.Vector2
+  private hoveredDice: DiceMesh | null = null
+  private onMouseMoveBound?: (event: MouseEvent) => void
+  private onMouseClickBound?: (event: MouseEvent) => void
   iteration = 0
   steps = 0
   dieIndex = 0
@@ -267,6 +279,33 @@ class DiceBox {
 
     this.initialized = true
     this.renderer.render(this.scene, this.camera)
+
+    if (this.enableDiceSelection) this.enableSelection()
+  }
+
+  private enableSelection(): void {
+    if (this.onMouseMoveBound) return
+    this.raycaster = new THREE.Raycaster()
+    this.mouse = new THREE.Vector2()
+    this.onMouseMoveBound = (event: MouseEvent) => this.onMouseMove(event)
+    this.onMouseClickBound = (event: MouseEvent) => this.onMouseClick(event)
+    // Listen on the window, not the container: core mounts the canvas inside a
+    // full-viewport `pointer-events:none` overlay, so the element itself never
+    // receives pointer events. We hit-test against the dice and only swallow a
+    // click when it actually lands on a die (see onMouseClick), which keeps the
+    // app UI beneath the overlay fully interactive.
+    globalThis.addEventListener('mousemove', this.onMouseMoveBound)
+    globalThis.addEventListener('click', this.onMouseClickBound, true)
+  }
+
+  private teardownSelection(): void {
+    if (this.onMouseMoveBound)
+      globalThis.removeEventListener('mousemove', this.onMouseMoveBound)
+    if (this.onMouseClickBound)
+      globalThis.removeEventListener('click', this.onMouseClickBound, true)
+    this.onMouseMoveBound = undefined
+    this.onMouseClickBound = undefined
+    this.hoveredDice = null
   }
 
   private ensureSoundsLoaded(): void {
@@ -1133,10 +1172,92 @@ class DiceBox {
       type: die.shape,
       sides: Number.parseInt(die.shape.substring(1)),
       id,
+      dieId: die.notation.index,
       value: last.value,
       label: last.label,
       reason: last.reason,
     }
+  }
+
+  private buildDiceEventData(die: DiceMesh): DiceEventData {
+    const result = this.dieResult(die, this.diceList.indexOf(die))
+    const { x, y, z } = die.position
+    return {
+      ...result,
+      position: { x, y, z },
+      screenPosition: this.getScreenPosition(die.position),
+      scale: die.scale.x,
+    }
+  }
+
+  private getScreenPosition(position: THREE.Vector3): Vec2Like {
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    const projected = position.clone().project(this.camera)
+    return {
+      x: (projected.x * 0.5 + 0.5) * rect.width,
+      y: (-projected.y * 0.5 + 0.5) * rect.height,
+    }
+  }
+
+  private dispatchDiceEvent(
+    name: 'diceHover' | 'diceClick',
+    detail: DiceEventData | null,
+  ): void {
+    document.dispatchEvent(new CustomEvent(name, { detail }))
+  }
+
+  private isSelectableDie(die: DiceMesh): boolean {
+    // Selectable once the die has come to rest with a stored result and is not
+    // mid-reroll. Per-throw removal keeps the animation loop (and `rolling`)
+    // alive through the dwell, so we gate on the die's own state, not `rolling`.
+    return (
+      this.diceList.includes(die) && die.result.length > 0 && !die.rerolling
+    )
+  }
+
+  private onMouseMove(event: MouseEvent): void {
+    if (!this.enableDiceSelection || this.diceList.length === 0) return
+    const { raycaster, mouse } = this
+    if (!raycaster || !mouse) return
+
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+    raycaster.setFromCamera(mouse, this.camera)
+
+    const hit = raycaster
+      .intersectObjects(this.diceList)
+      .map(intersection => intersection.object as DiceMesh)
+      .find(die => this.isSelectableDie(die))
+
+    if (hit) {
+      if (this.hoveredDice !== hit) {
+        this.hoveredDice = hit
+        const data = this.buildDiceEventData(hit)
+        this.onDiceHover(data)
+        this.dispatchDiceEvent('diceHover', data)
+      }
+    } else if (this.hoveredDice) {
+      this.hoveredDice = null
+      this.onDiceHover(null)
+      this.dispatchDiceEvent('diceHover', null)
+    }
+  }
+
+  private onMouseClick(event: MouseEvent): void {
+    if (
+      !this.enableDiceSelection ||
+      !this.hoveredDice ||
+      !this.isSelectableDie(this.hoveredDice)
+    )
+      return
+    // Only consume the click when it actually lands on a die; otherwise it falls
+    // through to whatever app UI sits beneath the overlay.
+    event.preventDefault()
+    event.stopPropagation()
+    const data = this.buildDiceEventData(this.hoveredDice)
+    this.onDiceClick(data)
+    this.dispatchDiceEvent('diceClick', data)
   }
 
   getDiceResults(): RollResults
@@ -1167,6 +1288,7 @@ class DiceBox {
           type: set.type,
           sides: Number.parseInt(set.type.substring(1)),
           id: counter,
+          dieId: this.diceList[counter].notation.index,
           value: last.value,
           label: last.label,
           reason: last.reason,
@@ -1252,15 +1374,26 @@ class DiceBox {
     })
   }
 
-  async reroll(diceIdArray: number[]): Promise<DiceResult[]> {
+  async reroll(
+    diceIdArray: number[],
+    options: { removal?: RemovalOptions } = {},
+  ): Promise<DiceResult[]> {
     this.iteration = 0
     this.last_time = 0
     const dice = diceIdArray
       .map(id => this.diceList[id])
       .filter((die): die is DiceMesh => Boolean(die))
+    if (dice.length === 0) return []
+    // Hand these dice to a fresh group: pull them out of whatever group is
+    // counting down to removal and undo any in-progress exit, so the new throw
+    // alone governs their lifecycle (otherwise the old group still removes them).
+    this.detachFromGroups(dice)
     for (const die of dice) {
+      die.scale.setScalar(1)
+      for (const mat of die.material) mat.opacity = 1
       die.rerolls += 1
       die.rerolling = true
+      die.body.collisionResponse = true
       die.body.wakeUp()
       die.body.type = CANNON.Body.DYNAMIC
       die.body.angularVelocity = new CANNON.Vec3(25, 25, 25)
@@ -1268,7 +1401,7 @@ class DiceBox {
     }
     return new Promise<DiceResult[]>(resolve => {
       this.throwGroups.push(
-        this.makeGroup(dice, this.resolveRemoval(), () => {
+        this.makeGroup(dice, this.resolveRemoval(options.removal), () => {
           const results = dice.map(die =>
             this.dieResult(die, this.diceList.indexOf(die)),
           )
@@ -1280,6 +1413,20 @@ class DiceBox {
         }),
       )
       this.ensureAnimating()
+    })
+  }
+
+  private detachFromGroups(dice: DiceMesh[]): void {
+    const detaching = new Set(dice)
+    this.throwGroups = this.throwGroups.filter(group => {
+      group.dice = group.dice.filter(die => !detaching.has(die))
+      if (group.dice.length > 0) return true
+      // Drop a now-empty group, but settle its promise if it never resolved.
+      if (!group.resolved) {
+        group.resolved = true
+        group.resolve()
+      }
+      return false
     })
   }
 

@@ -12,6 +12,25 @@
 //
 // eslint-disable camelcase -- engine config keys are snake_case
 
+/**
+ * A single die plus where it sits, emitted by the hover/click handlers when
+ * `enableDiceSelection` is on. `position` is the world-space center;
+ * `screenPosition` is that point projected to canvas pixels.
+ */
+export interface DiceEventData {
+  type: string
+  sides: number
+  /** Index in the live dice list at event time (shifts as dice are removed). */
+  id: number
+  /** Stable per-die id (survives rerolls); use this to track a die over time. */
+  dieId: number
+  value: number
+  reason: string
+  position: { x: number; y: number; z: number }
+  screenPosition: { x: number; y: number }
+  scale: number
+}
+
 /** Options accepted by the `DiceBox` constructor and `updateConfig`. */
 export interface DiceBoxOptions {
   assetPath: string
@@ -37,6 +56,12 @@ export interface DiceBoxOptions {
   onRemoveDiceComplete: (results: unknown) => void
   /** Fires when the table empties via timed removal (not an explicit clear). */
   onEmpty: () => void
+  /** Attach pointer listeners so hover/click on visible dice are detected. */
+  enableDiceSelection: boolean
+  /** Fires with the die under the pointer, or null when it leaves all dice. */
+  onDiceHover: (data: DiceEventData | null) => void
+  /** Fires when a visible die is clicked. */
+  onDiceClick: (data: DiceEventData) => void
 }
 
 /** How a throw's dice leave the table once their dwell elapses. */
@@ -77,7 +102,10 @@ export default class DiceBox {
   roll(notation: string | string[], options?: RollOptions): Promise<unknown>
   /** Alias of {@link roll}: explicitly join the live table. */
   add(notation: string | string[], options?: RollOptions): Promise<unknown>
-  reroll(diceIdArray: number[]): Promise<unknown>
+  reroll(
+    diceIdArray: number[],
+    options?: { removal?: RemovalOptions },
+  ): Promise<unknown>
   clearDice(): void
   updateConfig(options?: Partial<DiceBoxOptions>): Promise<void>
 
