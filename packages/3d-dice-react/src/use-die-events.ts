@@ -9,6 +9,10 @@ export type DieEventHandlers = {
   onClick?: (die: DieEvent) => void
   /** Fires whenever dice settle from a reroll or drag-flick, with new values. */
   onReroll?: (rolls: DieRoll[]) => void
+  /** Fires the moment a die is grabbed, with its current up-face value. */
+  onGrabbed?: (die: DieEvent) => void
+  /** Fires when the whole table comes to rest, with every die's value. */
+  onSettled?: (rolls: DieRoll[]) => void
 }
 
 /**
@@ -36,10 +40,18 @@ export function useDieEvents(handlers: DieEventHandlers): void {
     const unsubscribeReroll = renderer.onDieReroll(rolls =>
       handlersRef.current.onReroll?.(rolls),
     )
+    const unsubscribeGrabbed = renderer.onDieGrabbed(die =>
+      handlersRef.current.onGrabbed?.(die),
+    )
+    const unsubscribeSettled = renderer.onSettled(rolls =>
+      handlersRef.current.onSettled?.(rolls),
+    )
     return () => {
       unsubscribeHover()
       unsubscribeClick()
       unsubscribeReroll()
+      unsubscribeGrabbed()
+      unsubscribeSettled()
     }
   }, [renderer])
 }

@@ -29,6 +29,8 @@ type Options = {
   deterministic?: boolean
   /** How rolled dice leave the table; pass `{ style: 'none' }` to persist. */
   removal?: RemovalOptions
+  /** Keep this roll's dice flickable after they settle (re-flick a resting die). */
+  enableFlickOnSettled?: boolean
 }
 
 export function useRollExecutor({
@@ -39,6 +41,7 @@ export function useRollExecutor({
   onSettled,
   deterministic = true,
   removal = DEFAULT_REMOVAL,
+  enableFlickOnSettled = false,
 }: Options) {
   const { theme } = useDicePreferences()
   const renderer = useDiceRenderer()
@@ -62,12 +65,13 @@ export function useRollExecutor({
         renderer.roll(toDiceBoxNotation(result), {
           theme: result.theme ? themeToBoxConfig(result.theme) : undefined,
           removal,
+          enableFlickOnSettled,
         }),
         ANIMATION_TIMEOUT_MS,
         'dice animation',
       )
     },
-    [renderer, removal],
+    [renderer, removal, enableFlickOnSettled],
   )
 
   const throwDice = useCallback<PhysicalThrow>(
@@ -78,11 +82,12 @@ export function useRollExecutor({
             ? themeToBoxConfig(themeRef.current)
             : undefined,
           removal,
+          enableFlickOnSettled,
         }),
         ANIMATION_TIMEOUT_MS,
         'dice animation',
       ),
-    [renderer, removal],
+    [renderer, removal, enableFlickOnSettled],
   )
 
   const requestRoll = useCallback(

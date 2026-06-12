@@ -194,6 +194,8 @@ class DiceFactory {
     dicemesh.rerolls = 0
     dicemesh.resultReason = 'natural'
     dicemesh.mass = diceobj.mass
+    dicemesh.flickable = false
+    dicemesh.flickOnSettled = false
 
     dicemesh.getFaceValue = getFaceValue
     dicemesh.storeRolledValue = storeRolledValue

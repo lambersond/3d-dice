@@ -58,6 +58,7 @@ function toDieRolls(settled: unknown): DieRoll[] {
         value: d.value,
         sides: d.sides,
         type: d.type,
+        reason: typeof d.reason === 'string' ? d.reason : '',
       })
     }
   }
@@ -78,6 +79,7 @@ type BoxRollOptions = {
   theme?: Record<string, unknown>
   removal?: RemovalOptions
   onSpawned?: () => void
+  enableFlickOnSettled?: boolean
 }
 
 type DiceBoxInstance = {
@@ -114,6 +116,8 @@ export class DiceRenderer {
   private readonly hoverSubscribers = new Set<(die: DieEvent | null) => void>()
   private readonly clickSubscribers = new Set<(die: DieEvent) => void>()
   private readonly rerollSubscribers = new Set<(rolls: DieRoll[]) => void>()
+  private readonly grabSubscribers = new Set<(die: DieEvent) => void>()
+  private readonly settledSubscribers = new Set<(rolls: DieRoll[]) => void>()
   private visibilityBound = false
 
   constructor(config: DiceRendererConfig = {}) {
@@ -167,6 +171,30 @@ export class DiceRenderer {
     }
   }
 
+  /**
+   * Register a handler that fires the moment a die is grabbed, with its current
+   * up-face value (before it's re-thrown). Requires `enableDiceDrag`. Returns an
+   * unsubscribe.
+   */
+  onDieGrabbed(handler: (die: DieEvent) => void): () => void {
+    this.grabSubscribers.add(handler)
+    return () => {
+      this.grabSubscribers.delete(handler)
+    }
+  }
+
+  /**
+   * Register a handler that fires whenever the whole table comes to rest, with
+   * every die's current value (covers the initial roll and each flick). Holding
+   * a die defers this until it's released and settles. Returns an unsubscribe.
+   */
+  onSettled(handler: (rolls: DieRoll[]) => void): () => void {
+    this.settledSubscribers.add(handler)
+    return () => {
+      this.settledSubscribers.delete(handler)
+    }
+  }
+
   /** Remove every die currently on the table. */
   clear(): void {
     this.box?.clearDice?.()
@@ -205,7 +233,15 @@ export class DiceRenderer {
 
   async roll(
     notation: string,
-    options?: { theme?: Record<string, unknown>; removal?: RemovalOptions },
+    options?: {
+      theme?: Record<string, unknown>
+      removal?: RemovalOptions
+      /**
+       * Keep this throw's dice flickable after they settle. Forced off for
+       * deterministic notation (`...@values`), which can't be re-flicked.
+       */
+      enableFlickOnSettled?: boolean
+    },
   ): Promise<RolledDie[]> {
     const box = this.box
     if (!box || this.contextLost) return []
@@ -225,9 +261,13 @@ export class DiceRenderer {
       return []
     }
 
+    const deterministic = notation.includes('@')
     const settled = box.roll(notation, {
       theme: options?.theme,
       removal: options?.removal,
+      enableFlickOnSettled: deterministic
+        ? false
+        : options?.enableFlickOnSettled,
       onSpawned: releaseSpawn,
     })
 
@@ -379,6 +419,13 @@ export class DiceRenderer {
       onRerollComplete: (results: unknown) => {
         const rolls = toDieRolls(results)
         for (const cb of this.rerollSubscribers) cb(rolls)
+      },
+      onDiceGrabbed: (data: DieEvent) => {
+        for (const cb of this.grabSubscribers) cb(data)
+      },
+      onSettled: (results: unknown) => {
+        const rolls = toDieRolls(results)
+        for (const cb of this.settledSubscribers) cb(rolls)
       },
     }
   }

@@ -14,6 +14,7 @@ export type RollerInfo = {
 
 /**
  * A roll as it lives in the room log and travels over the wire: the engine's
- * dice outcome (`RollResult`) plus the identity of who rolled it.
+ * dice outcome (`RollResult`) plus the identity of who rolled it. `grabbed` marks
+ * a roll interrupted mid-tumble by a grab (the shown value is the grabbed face).
  */
-export type RollEntry = RollResult & { roller: RollerInfo }
+export type RollEntry = RollResult & { roller: RollerInfo; grabbed?: boolean }

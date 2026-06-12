@@ -18,6 +18,8 @@ export type ExampleConfig = {
   removal: RemovalOptions
   /** Construction config for this page's DiceRenderer. */
   renderer: DiceRendererConfig
+  /** Keep this roll's dice flickable after they settle (re-flick a resting die). */
+  enableFlickOnSettled?: boolean
   /** Which interaction layer renders over the dice. */
   interaction: ExampleInteraction
 }
@@ -29,19 +31,15 @@ const RESET: RemovalOptions = { style: 'reset', dwellMs: 1200 }
 
 export const EXAMPLES: ExampleConfig[] = [
   {
-    slug: 'basic-flickable',
-    label: 'Basic · flickable',
+    slug: 'basic',
+    label: 'Basic',
     category: 'Basic',
     description:
-      'Physical rolls. Hover a settled die to read it, tap or drag-flick to reroll. Dice fade out after a moment.',
+      'Physical rolls. Hover a settled die to read its value. Dice fade out after a moment.',
     deterministic: false,
     persistent: false,
     removal: TRANSIENT,
-    renderer: {
-      enableDiceSelection: true,
-      enableDiceDrag: true,
-      dragRemoval: TRANSIENT,
-    },
+    renderer: { enableDiceSelection: true },
     interaction: 'popover',
   },
   {
@@ -57,6 +55,23 @@ export const EXAMPLES: ExampleConfig[] = [
     interaction: 'none',
   },
   {
+    slug: 'basic-flickable',
+    label: 'Basic · flickable',
+    category: 'Basic',
+    description:
+      'Physical rolls. Hover a settled die to read it; grab to flick — even mid-roll — and it rerolls. Dice fade out after a moment.',
+    deterministic: false,
+    persistent: false,
+    removal: TRANSIENT,
+    enableFlickOnSettled: true,
+    renderer: {
+      enableDiceSelection: true,
+      enableDiceDrag: true,
+      dragRemoval: TRANSIENT,
+    },
+    interaction: 'popover',
+  },
+  {
     slug: 'persistent-flickable',
     label: 'Persistent · flickable',
     category: 'Advanced',
@@ -65,6 +80,7 @@ export const EXAMPLES: ExampleConfig[] = [
     deterministic: false,
     persistent: true,
     removal: PERSIST,
+    enableFlickOnSettled: true,
     renderer: {
       enableDiceSelection: true,
       enableDiceDrag: true,

@@ -46,6 +46,14 @@ export function LogEntry({ roll, isMine = false }: Readonly<Props>) {
             >
               {showAbsolute ? absolute : when}
             </button>
+            {roll.grabbed && (
+              <span
+                title='Grabbed mid-roll; the value shown is the face it was grabbed on'
+                className='shrink-0 rounded border border-warning bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-warning'
+              >
+                grabbed
+              </span>
+            )}
           </div>
           <p className='truncate font-mono text-xs text-text-secondary'>
             {formatResultExpression(roll)}

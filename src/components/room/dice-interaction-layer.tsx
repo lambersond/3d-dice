@@ -6,19 +6,27 @@ import type { DieEvent, DieRoll } from '@lambersond/3d-dice-core'
 
 /**
  * Floating layer for the 3D dice. Shows a result popover while hovering a
- * settled die; the grab/flick (and tap) gesture itself lives in the engine, so
- * this only forwards each flick's settled values via `onReroll` for logging.
- * Renders nothing until a die is hovered.
+ * settled die; the grab/flick gesture itself lives in the engine, which clears
+ * the hover the moment a die is grabbed (so the popover goes away during a drag).
+ * Forwards the grab (immediately, just that die) via `onGrabbed` and each
+ * table-at-rest snapshot (all dice) via `onSettled` for logging. Renders nothing
+ * until a die is hovered.
  */
 export function DiceInteractionLayer({
-  onReroll,
+  onGrabbed,
+  onSettled,
   flickable = true,
-}: Readonly<{ onReroll?: (rolls: DieRoll[]) => void; flickable?: boolean }>) {
+}: Readonly<{
+  onGrabbed?: (die: DieEvent) => void
+  onSettled?: (rolls: DieRoll[]) => void
+  flickable?: boolean
+}>) {
   const [hovered, setHovered] = useState<DieEvent | undefined>()
 
   useDieEvents({
     onHover: die => setHovered(die ?? undefined),
-    onReroll: rolls => onReroll?.(rolls),
+    onGrabbed: die => onGrabbed?.(die),
+    onSettled: rolls => onSettled?.(rolls),
   })
 
   if (!hovered) return <></>

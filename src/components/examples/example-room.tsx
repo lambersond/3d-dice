@@ -13,11 +13,15 @@ import { useRollExecutor } from '@/hooks/use-roll-executor'
 import { useUserProfile } from '@/hooks/use-user-profile'
 import type { ExampleConfig } from './examples-config'
 import type { RollEntry, RollerInfo } from '@/types/roll'
-import type { DiePool, DieRoll, DieSides } from '@lambersond/3d-dice-core'
+import type {
+  DieEvent,
+  DiePool,
+  DieRoll,
+  DieSides,
+} from '@lambersond/3d-dice-core'
 
-// A reroll/flick re-rolls one die and is logged as its own roll message. Group
-// the settled dice by sides into pools so the entry matches a normal roll.
-function flickEntry(
+// Build one log entry from a settle/reroll snapshot, grouping the dice by sides.
+function diceEntry(
   rolls: DieRoll[],
   roller: RollerInfo,
 ): RollEntry | undefined {
@@ -44,6 +48,26 @@ function flickEntry(
   }
 }
 
+// A single die grabbed mid-flight, logged the moment it's grabbed (its face).
+function grabbedEntry(die: DieEvent, roller: RollerInfo): RollEntry {
+  return {
+    id: crypto.randomUUID(),
+    at: Date.now(),
+    pools: [
+      {
+        sides: die.sides as DieSides,
+        count: 1,
+        rolls: [[die.value]],
+        kept: [die.value],
+      },
+    ],
+    modifier: 0,
+    total: die.value,
+    roller,
+    grabbed: true,
+  }
+}
+
 export function ExampleRoom({
   userId,
   example,
@@ -55,11 +79,18 @@ export function ExampleRoom({
   const { chats, append: appendChat } = usePersistedChats(
     `dice-log:chat:${example.slug}`,
   )
+
+  // Flickable pages drive their log from engine events (grab + table-at-rest)
+  // instead of the throw result, so the initial roll logs once the dice settle.
+  const flickable = !!example.renderer.enableDiceDrag
+  const noop = useCallback(() => {}, [])
+
   const { requestRoll, busy } = useRollExecutor({
     userId,
-    onLocalResult: appendRoll,
+    onLocalResult: flickable ? noop : appendRoll,
     deterministic: example.deterministic,
     removal: example.removal,
+    enableFlickOnSettled: example.enableFlickOnSettled,
   })
 
   const roller = useMemo<RollerInfo>(
@@ -67,9 +98,25 @@ export function ExampleRoom({
     [userId, profile?.name, profile?.image],
   )
 
-  const handleFlick = useCallback(
+  // The moment a die is grabbed: log just that die (the face it was grabbed on).
+  const handleGrabbed = useCallback(
+    (die: DieEvent) => appendRoll(grabbedEntry(die, roller)),
+    [appendRoll, roller],
+  )
+
+  // The whole table came to rest (initial roll or a flick): log every die.
+  const handleSettled = useCallback(
     (dice: DieRoll[]) => {
-      const entry = flickEntry(dice, roller)
+      const entry = diceEntry(dice, roller)
+      if (entry) appendRoll(entry)
+    },
+    [appendRoll, roller],
+  )
+
+  // Custom-actions reroll: log the rerolled die.
+  const handleReroll = useCallback(
+    (dice: DieRoll[]) => {
+      const entry = diceEntry(dice, roller)
       if (entry) appendRoll(entry)
     },
     [appendRoll, roller],
@@ -106,12 +153,13 @@ export function ExampleRoom({
       />
       {example.interaction === 'popover' && (
         <DiceInteractionLayer
-          onReroll={handleFlick}
-          flickable={!!example.renderer.enableDiceDrag}
+          onGrabbed={flickable ? handleGrabbed : undefined}
+          onSettled={flickable ? handleSettled : undefined}
+          flickable={flickable}
         />
       )}
       {example.interaction === 'custom' && (
-        <CustomActionsLayer onReroll={handleFlick} removal={example.removal} />
+        <CustomActionsLayer onReroll={handleReroll} removal={example.removal} />
       )}
     </>
   )

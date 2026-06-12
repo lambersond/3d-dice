@@ -65,6 +65,16 @@ export interface DiceMesh extends THREE.Mesh {
   rerolls: number
   rerolling: boolean
   resultReason: string
+  /** May this die be grabbed/flicked? (drag enabled and non-deterministic). */
+  flickable: boolean
+  /** Does this die stay flickable once it has settled at rest? */
+  flickOnSettled: boolean
+  /**
+   * The other physical die of a percentile (d100) pair: the tens die (`d100`
+   * type) and the ones die (`d10` type) point at each other so a grab/flick
+   * picks up and rerolls both together, and results combine into one d100.
+   */
+  percentilePartner?: DiceMesh
   /** Home transform to return to under the `reset` disposition (see DiceBox). */
   placement?: DiePlacement
   getFaceValue(): FaceValue
@@ -200,6 +210,12 @@ export interface RollOptions {
   removal?: RemovalOptions
   /** Fires once the dice exist in the world (before the throw settles). */
   onSpawned?: () => void
+  /**
+   * Keep this throw's dice flickable after they come to rest (re-flick a resting
+   * die). Defaults to false. Ignored for deterministic throws. Grab-while-rolling
+   * is always available when the box has `enableDiceDrag`.
+   */
+  enableFlickOnSettled?: boolean
 }
 
 /** One parsed notation set (`2d6`, `1d20`, …). */
@@ -300,4 +316,8 @@ export interface DiceBoxConfig {
   enableDiceDrag: boolean
   /** Disposition applied to a flicked/tapped die (default returns it home). */
   dragRemoval: RemovalOptions
+  /** Fires when a die is grabbed, carrying its current up-face value. */
+  onDiceGrabbed: (data: DiceEventData) => void
+  /** Fires when the whole table comes to rest, with every die's value. */
+  onSettled: (results: DiceResult[]) => void
 }

@@ -128,6 +128,8 @@ export type DieRoll = {
   value: number
   sides: number
   type: string
+  /** How the value was produced: e.g. 'natural', 'reroll', or 'grabbed'. */
+  reason: string
 }
 
 /**
