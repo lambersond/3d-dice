@@ -2,6 +2,7 @@ import type {
   DiceRendererConfig,
   DieEvent,
   DieRoll,
+  PlaceDieOptions,
   RemovalOptions,
   RolledDie,
 } from './types'
@@ -80,6 +81,7 @@ type BoxRollOptions = {
   removal?: RemovalOptions
   onSpawned?: () => void
   enableFlickOnSettled?: boolean
+  center?: boolean
 }
 
 type DiceBoxInstance = {
@@ -96,6 +98,7 @@ type DiceBoxInstance = {
     },
   ) => Promise<unknown>
   remove?: (ids: number[]) => Promise<unknown>
+  place?: (options: PlaceDieOptions) => unknown
   updateConfig?: (config: Record<string, unknown>) => Promise<void>
   clearDice?: () => void
   dispose?: () => void
@@ -118,6 +121,7 @@ export class DiceRenderer {
   private readonly rerollSubscribers = new Set<(rolls: DieRoll[]) => void>()
   private readonly grabSubscribers = new Set<(die: DieEvent) => void>()
   private readonly settledSubscribers = new Set<(rolls: DieRoll[]) => void>()
+  private readonly addedSubscribers = new Set<(rolls: DieRoll[]) => void>()
   private visibilityBound = false
 
   constructor(config: DiceRendererConfig = {}) {
@@ -195,9 +199,53 @@ export class DiceRenderer {
     }
   }
 
+  /**
+   * Register a handler that fires when a die added via the grab-to-add gesture
+   * (right-click while holding) settles, with its value(s) — one die, or two for
+   * a percentile pair (tens then ones). Requires `enableDiceAdd`. Returns an
+   * unsubscribe.
+   */
+  onDiceAdded(handler: (rolls: DieRoll[]) => void): () => void {
+    this.addedSubscribers.add(handler)
+    return () => {
+      this.addedSubscribers.delete(handler)
+    }
+  }
+
   /** Remove every die currently on the table. */
   clear(): void {
     this.box?.clearDice?.()
+  }
+
+  /**
+   * Drop a single grabbable die into the center of the table and leave it there
+   * (persistent, flickable). Used by the center-seed flick interaction to place
+   * the die you grab. Resolves once it has settled.
+   */
+  async seed(notation: string): Promise<void> {
+    const box = this.box
+    if (!box || this.contextLost) return
+    const container = this.getContainer()
+    if (container) container.style.opacity = '1'
+    await box.roll(notation, {
+      center: true,
+      removal: { style: 'none' },
+      enableFlickOnSettled: true,
+    })
+  }
+
+  /**
+   * Place a single die at a normalized (-1..1) table coordinate, resting flat
+   * with the given face value showing up. Instant (no tumble) and persistent.
+   * Returns the placed die's value + stable `dieId`, or undefined if not ready.
+   */
+  placeDie(options: PlaceDieOptions): DieRoll | undefined {
+    const box = this.box
+    if (!box?.place || this.contextLost) return undefined
+    const container = this.getContainer()
+    if (container) container.style.opacity = '1'
+    const rolls = toDieRolls([box.place(options)])
+    return rolls[0]
   }
 
   /** Take specific dice off the table by id (e.g. a "set aside" action). */
@@ -409,6 +457,7 @@ export class DiceRenderer {
       },
       enableDiceSelection: c.enableDiceSelection ?? false,
       enableDiceDrag: c.enableDiceDrag ?? false,
+      enableDiceAdd: c.enableDiceAdd ?? false,
       ...(c.dragRemoval ? { dragRemoval: c.dragRemoval } : {}),
       onDiceHover: (data: DieEvent | null) => {
         for (const cb of this.hoverSubscribers) cb(data)
@@ -426,6 +475,10 @@ export class DiceRenderer {
       onSettled: (results: unknown) => {
         const rolls = toDieRolls(results)
         for (const cb of this.settledSubscribers) cb(rolls)
+      },
+      onDiceAdded: (results: unknown) => {
+        const rolls = toDieRolls(results)
+        for (const cb of this.addedSubscribers) cb(rolls)
       },
     }
   }

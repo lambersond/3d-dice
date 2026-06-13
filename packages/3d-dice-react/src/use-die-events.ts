@@ -13,6 +13,8 @@ export type DieEventHandlers = {
   onGrabbed?: (die: DieEvent) => void
   /** Fires when the whole table comes to rest, with every die's value. */
   onSettled?: (rolls: DieRoll[]) => void
+  /** Fires when a grab-to-add die (or percentile pair) settles. */
+  onAdded?: (rolls: DieRoll[]) => void
 }
 
 /**
@@ -46,12 +48,16 @@ export function useDieEvents(handlers: DieEventHandlers): void {
     const unsubscribeSettled = renderer.onSettled(rolls =>
       handlersRef.current.onSettled?.(rolls),
     )
+    const unsubscribeAdded = renderer.onDiceAdded(rolls =>
+      handlersRef.current.onAdded?.(rolls),
+    )
     return () => {
       unsubscribeHover()
       unsubscribeClick()
       unsubscribeReroll()
       unsubscribeGrabbed()
       unsubscribeSettled()
+      unsubscribeAdded()
     }
   }, [renderer])
 }

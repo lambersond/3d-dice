@@ -216,6 +216,11 @@ export interface RollOptions {
    * is always available when the box has `enableDiceDrag`.
    */
   enableFlickOnSettled?: boolean
+  /**
+   * Drop this throw's dice into the middle of the table (from above) instead of
+   * tumbling in from the edge. Used to seed a grabbable die in the center.
+   */
+  center?: boolean
 }
 
 /** One parsed notation set (`2d6`, `1d20`, …). */
@@ -320,4 +325,8 @@ export interface DiceBoxConfig {
   onDiceGrabbed: (data: DiceEventData) => void
   /** Fires when the whole table comes to rest, with every die's value. */
   onSettled: (results: DiceResult[]) => void
+  /** Right-click while holding a die drops another of the same type beside it. */
+  enableDiceAdd: boolean
+  /** Fires when a grab-to-add die (or percentile pair) settles, with its value(s). */
+  onDiceAdded: (results: DiceResult[]) => void
 }

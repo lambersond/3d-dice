@@ -3,7 +3,7 @@ import type {
   RemovalOptions,
 } from '@lambersond/3d-dice-core'
 
-export type ExampleInteraction = 'popover' | 'custom' | 'none'
+export type ExampleInteraction = 'popover' | 'custom' | 'none' | 'seed'
 
 export type ExampleConfig = {
   slug: string
@@ -99,6 +99,24 @@ export const EXAMPLES: ExampleConfig[] = [
     removal: PERSIST,
     renderer: { enableDiceSelection: true },
     interaction: 'popover',
+  },
+  {
+    slug: 'grab-to-add',
+    label: 'Grab to add',
+    category: 'Advanced',
+    description:
+      'No tray: a palette of d4–d20 rests along the bottom, each showing its max face. Grab one and flick to roll; right-click while holding to add more of that die in a ring, then release to drop them all together. Once they settle the roll is recorded and the palette is restored.',
+    deterministic: false,
+    persistent: true,
+    removal: PERSIST,
+    enableFlickOnSettled: true,
+    renderer: {
+      enableDiceSelection: true,
+      enableDiceDrag: true,
+      enableDiceAdd: true,
+      dragRemoval: { style: 'none' },
+    },
+    interaction: 'seed',
   },
   {
     slug: 'custom-actions',

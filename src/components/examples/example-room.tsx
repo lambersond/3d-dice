@@ -1,6 +1,13 @@
 'use client'
 
 import { useCallback, useMemo } from 'react'
+import {
+  combineD100,
+  type DieEvent,
+  type DiePool,
+  type DieRoll,
+  type DieSides,
+} from '@lambersond/3d-dice-core'
 import { useDiceRenderer } from '@lambersond/3d-dice-react'
 import { Eraser } from 'lucide-react'
 import { DicePreferencesButton } from '@/components/dice-preferences'
@@ -13,15 +20,9 @@ import { useRollExecutor } from '@/hooks/use-roll-executor'
 import { useUserProfile } from '@/hooks/use-user-profile'
 import type { ExampleConfig } from './examples-config'
 import type { RollEntry, RollerInfo } from '@/types/roll'
-import type {
-  DieEvent,
-  DiePool,
-  DieRoll,
-  DieSides,
-} from '@lambersond/3d-dice-core'
 
 // Build one log entry from a settle/reroll snapshot, grouping the dice by sides.
-function diceEntry(
+export function diceEntry(
   rolls: DieRoll[],
   roller: RollerInfo,
 ): RollEntry | undefined {
@@ -65,6 +66,57 @@ function grabbedEntry(die: DieEvent, roller: RollerInfo): RollEntry {
     total: die.value,
     roller,
     grabbed: true,
+  }
+}
+
+function plainPool(die: DieRoll): DiePool {
+  return {
+    sides: die.sides as DieSides,
+    count: 1,
+    rolls: [[die.value]],
+    kept: [die.value],
+    slots: [{ kind: 'plain', parts: [{ dieId: die.dieId, value: die.value }] }],
+  }
+}
+
+function percentilePool(tens: DieRoll, ones: DieRoll): DiePool {
+  const value = combineD100(tens.value, ones.value)
+  return {
+    sides: 100,
+    count: 1,
+    rolls: [[value]],
+    kept: [value],
+    slots: [
+      {
+        kind: 'd100',
+        parts: [
+          { dieId: tens.dieId, value: tens.value },
+          { dieId: ones.dieId, value: ones.value },
+        ],
+      },
+    ],
+  }
+}
+
+// A die (or percentile pair) added via grab-to-add, logged as its own entry with
+// `slots` so a later flick updates it in place. One right-click adds one unit: a
+// single die, or two dice (a percentile pair reported tens-then-ones).
+function addedEntry(
+  rolls: DieRoll[],
+  roller: RollerInfo,
+): RollEntry | undefined {
+  if (rolls.length === 0) return undefined
+  const pool =
+    rolls.length === 2
+      ? percentilePool(rolls[0], rolls[1])
+      : plainPool(rolls[0])
+  return {
+    id: crypto.randomUUID(),
+    at: Date.now(),
+    pools: [pool],
+    modifier: 0,
+    total: pool.kept.reduce((sum, v) => sum + v, 0),
+    roller,
   }
 }
 
@@ -119,6 +171,15 @@ export function ExampleRoom({
     [registerReroll],
   )
 
+  // A grab-to-add die settled: log it as its own entry (reroll-trackable).
+  const handleAdded = useCallback(
+    (dice: DieRoll[]) => {
+      const entry = addedEntry(dice, roller)
+      if (entry) appendRoll(entry)
+    },
+    [appendRoll, roller],
+  )
+
   // Custom-actions reroll: log the rerolled die as its own entry.
   const handleCustomReroll = useCallback(
     (dice: DieRoll[]) => {
@@ -161,6 +222,7 @@ export function ExampleRoom({
         <DiceInteractionLayer
           onGrabbed={flickable ? handleGrabbed : undefined}
           onReroll={flickable ? handleFlickReroll : undefined}
+          onAdded={flickable ? handleAdded : undefined}
           flickable={flickable}
         />
       )}
@@ -174,7 +236,7 @@ export function ExampleRoom({
   )
 }
 
-function ExampleHeader({
+export function ExampleHeader({
   title,
   description,
   clearable,

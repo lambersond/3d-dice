@@ -411,10 +411,14 @@ class DiceFactory {
     return { composite: compositetexture, bump: bumpMap }
   }
 
-  private labelKey(label: DiceLabel): string {
+  // Build a stable cache-key fragment from a face label. d4 labels are nested
+  // arrays that also contain numbers (e.g. `[0, 0, 0]`), so anything that isn't
+  // a string/image/array is coerced rather than treated as an array.
+  private labelKey(label: unknown): string {
     if (typeof label === 'string') return label
     if (label instanceof HTMLImageElement) return label.src
-    return label.map(part => this.labelKey(part)).join(',')
+    if (Array.isArray(label)) return label.map(part => this.labelKey(part)).join(',')
+    return String(label)
   }
 
   private faceCacheKey(

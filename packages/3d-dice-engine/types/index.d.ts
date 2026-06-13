@@ -66,6 +66,10 @@ export interface DiceBoxOptions {
   enableDiceDrag: boolean
   /** Disposition applied to a flicked/tapped die (default returns it home). */
   dragRemoval: RemovalOptions
+  /** Right-click while holding a die drops another of the same type beside it. */
+  enableDiceAdd: boolean
+  /** Fires when a grab-to-add die (or percentile pair) settles, with its value(s). */
+  onDiceAdded: (results: unknown) => void
 }
 
 /** A 3D vector, used for a die's launch velocity/position/spin. */
@@ -98,6 +102,11 @@ export interface RollOptions {
    * caller can let a concurrent add() join the live tumble.
    */
   onSpawned?: () => void
+  /**
+   * Drop this throw's dice into the middle of the table instead of tumbling in
+   * from the edge (used to seed a grabbable die in the center).
+   */
+  center?: boolean
 }
 
 export default class DiceBox {
@@ -127,6 +136,18 @@ export default class DiceBox {
   ): Promise<unknown>
   /** Take dice off the table by index (e.g. a "set aside" action). */
   remove(diceIdArray: number[]): Promise<unknown>
+  /**
+   * Place a single die at a normalized (-1..1) table coordinate (0,0 = center),
+   * resting flat with `value` showing up. Instant (no tumble); `grabbable` only
+   * applies when the box has `enableDiceDrag`.
+   */
+  place(options: {
+    type: string
+    value: number
+    x: number
+    y: number
+    grabbable?: boolean
+  }): unknown
   clearDice(): void
   updateConfig(options?: Partial<DiceBoxOptions>): Promise<void>
   /** Stop the loop, drop dice, detach listeners + canvas, release the context. */

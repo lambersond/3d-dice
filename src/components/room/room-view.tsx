@@ -12,12 +12,14 @@ type Props = {
   userId: string
   rolls: readonly RollEntry[]
   chats: readonly ChatMessage[]
-  onRollRequest: (request: RollRequest) => void
-  onSendMessage: (text: string) => void
+  onRollRequest?: (request: RollRequest) => void
+  onSendMessage?: (text: string) => void
   disabled?: boolean
   syncing?: boolean
   newSinceAt?: number
   header: ReactNode
+  /** Render the dice-builder tray below the log (default true). */
+  showTray?: boolean
 }
 
 export function RoomView({
@@ -27,6 +29,7 @@ export function RoomView({
   onRollRequest,
   disabled = false,
   header,
+  showTray = true,
 }: Readonly<Props>) {
   useDiceThemeSync()
 
@@ -34,7 +37,9 @@ export function RoomView({
     <div className='flex min-h-0 flex-1 flex-col'>
       {header}
       <DiceLog rolls={rolls} chats={chats} myRollerId={userId} />
-      <DiceTray onRoll={onRollRequest} disabled={disabled} />
+      {showTray && (
+        <DiceTray onRoll={onRollRequest ?? (() => {})} disabled={disabled} />
+      )}
     </div>
   )
 }

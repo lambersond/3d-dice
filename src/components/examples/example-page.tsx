@@ -8,6 +8,7 @@ import {
 } from '@lambersond/3d-dice-react'
 import { ExampleRoom } from './example-room'
 import { findExample } from './examples-config'
+import { SeedFlickRoom } from './seed-flick-room'
 
 export function ExamplePage({
   userId,
@@ -23,7 +24,11 @@ export function ExamplePage({
   return (
     <DicePreferencesProvider storage={storage}>
       <DiceRendererProvider config={example.renderer}>
-        <ExampleRoom userId={userId} example={example} />
+        {example.interaction === 'seed' ? (
+          <SeedFlickRoom userId={userId} example={example} />
+        ) : (
+          <ExampleRoom userId={userId} example={example} />
+        )}
       </DiceRendererProvider>
     </DicePreferencesProvider>
   )

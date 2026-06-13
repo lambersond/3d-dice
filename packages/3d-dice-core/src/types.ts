@@ -112,11 +112,26 @@ export type DiceRendererConfig = {
   enableDiceSelection?: boolean
   /** Let dice be grabbed and flicked (drag-to-reroll); see onDieReroll. */
   enableDiceDrag?: boolean
+  /** Right-click while holding a die drops another of the same type; see onDiceAdded. */
+  enableDiceAdd?: boolean
   /** Disposition for a flicked/tapped die: `reset` (return home, for persistent
    * trays) or `shrink`/`fade` (leave, for transient). Defaults to `reset`. */
   dragRemoval?: RemovalOptions
   /** CSS overrides for the auto-created overlay container (see DiceOverlayConfig). */
   overlay?: DiceOverlayConfig
+}
+
+/**
+ * Place a single die at a fixed spot showing a chosen face. `x`/`y` are
+ * normalized table coordinates in -1..1 (0,0 = center). `grabbable` (default
+ * false) only takes effect when the renderer has `enableDiceDrag`.
+ */
+export type PlaceDieOptions = {
+  type: string
+  value: number
+  x: number
+  y: number
+  grabbable?: boolean
 }
 
 /**

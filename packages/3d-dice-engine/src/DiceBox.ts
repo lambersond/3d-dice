@@ -46,6 +46,9 @@ const DRAG_GAIN = 1
 const DRAG_MAX_SPEED = 6000
 const DRAG_LAUNCH_Z = 250
 const RESET_DWELL_MS = 1200
+// Right-click-added dice are carried this far above the table so releasing the
+// grab lets them drop, rather than sitting flat with the held die.
+const CARRY_LIFT = 220
 
 function describeWebGLSupport(): Record<string, unknown> {
   const info: Record<string, unknown> = {
@@ -116,6 +119,8 @@ const defaultConfig: DiceBoxConfig = {
   dragRemoval: { style: 'reset', dwellMs: RESET_DWELL_MS },
   onDiceGrabbed: () => {},
   onSettled: () => {},
+  enableDiceAdd: false,
+  onDiceAdded: () => {},
 }
 
 class DiceBox {
@@ -148,6 +153,8 @@ class DiceBox {
   dragRemoval!: RemovalOptions
   onDiceGrabbed!: (data: DiceEventData) => void
   onSettled!: (results: DiceResult[]) => void
+  enableDiceAdd!: boolean
+  onDiceAdded!: (results: DiceResult[]) => void
 
   container: HTMLElement
   dimensions: THREE.Vector2
@@ -180,6 +187,11 @@ class DiceBox {
   // both dice); it tracks the cursor at a fixed offset and rerolls together.
   private draggingPartner: DiceMesh | null = null
   private dragPartnerOffset = { x: 0, y: 0 }
+  // Dice added via right-click while holding: carried (frozen) in a ring around
+  // the held die and dropped together with it on release. Each unit is one die
+  // (or a percentile pair); offsets are relative to the held die's position.
+  private carriedUnits: DiceMesh[][] = []
+  private readonly carriedOffset = new Map<DiceMesh, { x: number; y: number }>()
   private dragRestZ = 0
   private dragSamples: { x: number; y: number; t: number }[] = []
   // True while every die on the table is settled at rest; drives onSettled.
@@ -187,6 +199,7 @@ class DiceBox {
   private onPointerDownBound?: (event: PointerEvent) => void
   private onPointerMoveBound?: (event: PointerEvent) => void
   private onPointerUpBound?: (event: PointerEvent) => void
+  private onContextMenuBound?: (event: MouseEvent) => void
   private onResizeBound?: () => void
   private disposed = false
   iteration = 0
@@ -345,6 +358,11 @@ class DiceBox {
       globalThis.addEventListener('pointerdown', this.onPointerDownBound, true)
       globalThis.addEventListener('pointermove', this.onPointerMoveBound, true)
       globalThis.addEventListener('pointerup', this.onPointerUpBound, true)
+      if (this.enableDiceAdd) {
+        // Right-click while holding a die drops another of the same type.
+        this.onContextMenuBound = (event: MouseEvent) => this.onContextMenu(event)
+        globalThis.addEventListener('contextmenu', this.onContextMenuBound, true)
+      }
     } else if (this.enableDiceSelection) {
       this.onMouseClickBound = (event: MouseEvent) => this.onMouseClick(event)
       globalThis.addEventListener('click', this.onMouseClickBound, true)
@@ -362,14 +380,19 @@ class DiceBox {
       globalThis.removeEventListener('pointermove', this.onPointerMoveBound, true)
     if (this.onPointerUpBound)
       globalThis.removeEventListener('pointerup', this.onPointerUpBound, true)
+    if (this.onContextMenuBound)
+      globalThis.removeEventListener('contextmenu', this.onContextMenuBound, true)
     this.onMouseMoveBound = undefined
     this.onMouseClickBound = undefined
     this.onPointerDownBound = undefined
     this.onPointerMoveBound = undefined
     this.onPointerUpBound = undefined
+    this.onContextMenuBound = undefined
     this.hoveredDice = null
     this.dragging = null
     this.draggingPartner = null
+    this.carriedUnits = []
+    this.carriedOffset.clear()
   }
 
   private ensureSoundsLoaded(): void {
@@ -1233,6 +1256,8 @@ class DiceBox {
     this.running = false
     this.dragging = null
     this.draggingPartner = null
+    this.carriedUnits = []
+    this.carriedOffset.clear()
     this.clearHover()
     this.cancelGroups()
     let dice: DiceMesh | undefined
@@ -1405,7 +1430,7 @@ class DiceBox {
   }
 
   private dispatchDiceEvent(
-    name: 'diceHover' | 'diceClick' | 'diceGrabbed' | 'diceSettled',
+    name: 'diceHover' | 'diceClick' | 'diceGrabbed' | 'diceSettled' | 'diceAdded',
     detail: unknown,
   ): void {
     document.dispatchEvent(new CustomEvent(name, { detail }))
@@ -1660,6 +1685,8 @@ class DiceBox {
       partner.body.position.set(px, py, this.dragRestZ)
       partner.position.set(px, py, this.dragRestZ)
     }
+    // Carry the ring of right-click-added dice around the cursor.
+    if (this.carriedUnits.length > 0) this.placeCarriedAround(point.x, point.y)
     this.dragSamples.push({ x: point.x, y: point.y, t: event.timeStamp })
     if (this.dragSamples.length > 6) this.dragSamples.shift()
     // Render directly so the held die tracks the cursor even while the physics
@@ -1676,6 +1703,11 @@ class DiceBox {
     this.dragging = null
     this.draggingPartner = null
 
+    const flick = this.flickVelocity(this.dragSamples)
+    this.dragSamples = []
+    // Drop any right-click-added ring together with the held die.
+    this.releaseCarried(flick)
+
     // Reroll the grabbed die and, for a percentile, its partner together.
     const ids = [this.diceList.indexOf(die)]
     if (partner) {
@@ -1684,8 +1716,6 @@ class DiceBox {
     }
     if (ids[0] < 0) return
 
-    const flick = this.flickVelocity(this.dragSamples)
-    this.dragSamples = []
     // Disposition is configured per box: persistent boxes return the die home,
     // transient boxes let it leave on the normal exit animation.
     const removal = this.dragRemoval
@@ -1697,6 +1727,148 @@ class DiceBox {
           removal,
         })
       : this.reroll(ids, { removal }))
+  }
+
+  // Right-click while holding a die adds another of the same type to the ring
+  // carried around it (dropped together on release). Ignored — and the native
+  // menu left alone — when nothing is held.
+  private onContextMenu(event: MouseEvent): void {
+    if (!this.dragging) return
+    event.preventDefault()
+    event.stopPropagation()
+    this.addCarried(this.dragging)
+  }
+
+  // Spawn a frozen die of the held die's type — or a percentile pair — and add it
+  // to the carried ring around the held die. It tracks the cursor with the rest
+  // and is thrown/logged only when the grab ends (see releaseCarried).
+  private addCarried(held: DiceMesh): void {
+    const isPercentile =
+      held.percentilePartner !== undefined || held.notation.type === 'd100'
+    const notation = isPercentile ? '1d100+1d10' : `1${held.notation.type}`
+    const unit = this.spawnCarriedUnit(notation)
+    if (unit.length === 0) return
+    this.carriedUnits.push(unit)
+    this.layoutCarried()
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  // Spawn one unit of dice held still (KINEMATIC) and flickable, with no throw
+  // group, so they neither fall nor settle until released.
+  private spawnCarriedUnit(notationString: string): DiceMesh[] {
+    const throwNotation = this.startClickThrow(notationString)
+    if (!throwNotation || throwNotation.error || throwNotation.vectors.length === 0) {
+      return []
+    }
+    const existing = this.diceList.length
+    this.setThrowGroup(false)
+    for (const vectordata of throwNotation.vectors) this.spawnDice(vectordata)
+    const unit = this.diceList.slice(existing)
+    for (const die of unit) {
+      die.flickable = this.enableDiceDrag
+      die.flickOnSettled = this.enableDiceDrag
+      die.rerolling = false
+      die.body.type = CANNON.Body.KINEMATIC
+      die.body.velocity.setZero()
+      die.body.angularVelocity.setZero()
+    }
+    this.linkPercentilePairs(unit)
+    return unit
+  }
+
+  // Arrange the carried units in concentric rings around the held die: fill the
+  // innermost ring, then start a new (larger) ring once it's full, rather than
+  // ballooning a single ring's radius. Offsets are relative to the held die.
+  private layoutCarried(): void {
+    const held = this.dragging
+    if (!held) return
+    const count = this.carriedUnits.length
+    if (count === 0) return
+    const r = this.dieRadius(held)
+    const slotArc = r * 2.4
+    let placed = 0
+    let ring = 0
+    while (placed < count) {
+      const radius = r * 3 + ring * slotArc
+      const capacity = Math.max(1, Math.floor((2 * Math.PI * radius) / slotArc))
+      const inRing = Math.min(capacity, count - placed)
+      for (let j = 0; j < inRing; j++) {
+        const angle = (2 * Math.PI * j) / inRing
+        this.placeCarriedUnit(this.carriedUnits[placed + j], radius, angle, r)
+      }
+      placed += inRing
+      ring++
+    }
+    const { x, y } = held.body.position
+    this.placeCarriedAround(x, y)
+  }
+
+  // Record one carried unit's offset at (radius, angle) from the held die; a
+  // percentile pair is split apart along the ring's tangent.
+  private placeCarriedUnit(
+    unit: DiceMesh[],
+    radius: number,
+    angle: number,
+    r: number,
+  ): void {
+    const cx = Math.cos(angle) * radius
+    const cy = Math.sin(angle) * radius
+    if (unit.length === 1) {
+      this.carriedOffset.set(unit[0], { x: cx, y: cy })
+      return
+    }
+    const tx = -Math.sin(angle) * r
+    const ty = Math.cos(angle) * r
+    this.carriedOffset.set(unit[0], { x: cx + tx, y: cy + ty })
+    this.carriedOffset.set(unit[1], { x: cx - tx, y: cy - ty })
+  }
+
+  // Position every carried die at its ring offset from a center point, lifted
+  // above the table so a release lets them drop.
+  private placeCarriedAround(centerX: number, centerY: number): void {
+    const z = this.dragRestZ + CARRY_LIFT
+    for (const unit of this.carriedUnits) {
+      for (const die of unit) {
+        const off = this.carriedOffset.get(die)
+        if (!off) continue
+        die.body.position.set(centerX + off.x, centerY + off.y, z)
+        die.position.set(centerX + off.x, centerY + off.y, z)
+      }
+    }
+  }
+
+  // Throw the carried units (dropping/flicking with the held die) and report
+  // each unit via onDiceAdded as it settles, so each logs its own entry.
+  private releaseCarried(flick: { x: number; y: number } | null): void {
+    const units = this.carriedUnits
+    this.carriedUnits = []
+    this.carriedOffset.clear()
+    if (units.length === 0) return
+    const removal = this.resolveRemoval(this.dragRemoval)
+    for (const unit of units) {
+      for (const die of unit) {
+        die.scale.setScalar(1)
+        die.body.collisionResponse = true
+        die.body.wakeUp()
+        die.body.type = CANNON.Body.DYNAMIC
+        die.body.angularVelocity = new CANNON.Vec3(25, 25, 25)
+        die.body.velocity = flick
+          ? new CANNON.Vec3(flick.x, flick.y, DRAG_LAUNCH_Z)
+          : new CANNON.Vec3(0, 0, 0)
+      }
+      this.throwGroups.push(
+        this.makeGroup(unit, removal, () => {
+          const results = unit.map(die =>
+            this.dieResult(die, this.diceList.indexOf(die)),
+          )
+          this.onDiceAdded(results)
+          this.dispatchDiceEvent('diceAdded', results)
+        }),
+      )
+    }
+    this.iteration = 0
+    this.last_time = 0
+    this.ensureAnimating()
   }
 
   // Average drag velocity over the recent samples, in world units/sec. Returns
@@ -1780,6 +1952,69 @@ class DiceBox {
     return this.add(notationString, options)
   }
 
+  // Place a single die at a normalized (-1..1) table coordinate, resting flat
+  // with `value` showing up. Synchronous (no tumble): the die is settled in
+  // place, its up-face swapped to `value`, then frozen. `grabbable` only takes
+  // effect when the box has `enableDiceDrag`.
+  place(options: {
+    type: string
+    value: number
+    x: number
+    y: number
+    grabbable?: boolean
+  }): DiceResult | undefined {
+    const { type, value, x, y, grabbable } = options
+    const throwNotation = this.startClickThrow(`1${type}`)
+    if (!throwNotation || throwNotation.error || throwNotation.vectors.length === 0) {
+      return undefined
+    }
+
+    // Normalized (-1..1) → world; 0.9 keeps it inside the walls (at ±0.93).
+    const wx = x * this.display.containerWidth * 0.9
+    const wy = y * this.display.containerHeight * 0.9
+    const vector = throwNotation.vectors[0]
+    vector.pos = { x: wx, y: wy, z: 200 }
+    vector.velocity = { x: 0, y: 0, z: 0 }
+    vector.angle = {
+      x: Math.random() * 2,
+      y: Math.random() * 2,
+      z: Math.random() * 2,
+    }
+
+    const existing = this.diceList.length
+    this.setThrowGroup(false)
+    this.spawnDice(vector)
+    const die = this.diceList[existing]
+    if (!die) return undefined
+
+    const flickable = !!grabbable && this.enableDiceDrag
+    die.flickable = flickable
+    die.flickOnSettled = flickable
+
+    // Settle flat in place (synchronous, no animation), swap the up-face to the
+    // requested value, and record it.
+    this.simulateAddedDice(existing)
+    this.swapDiceFace(die, value)
+    die.storeRolledValue('placed')
+
+    // Pin to the exact coordinate at rest, keeping the settled (flat) rotation.
+    const z = die.body.position.z
+    const q = die.body.quaternion
+    die.rerolling = false
+    die.body.type = CANNON.Body.KINEMATIC
+    die.body.velocity.setZero()
+    die.body.angularVelocity.setZero()
+    die.body.position.set(wx, wy, z)
+    die.position.set(wx, wy, z)
+    die.quaternion.set(q.x, q.y, q.z, q.w)
+    this.recordPlacement(die)
+    this.animstate = 'afterthrow'
+    this.steps = 0
+    this.iteration = 0
+    this.renderer.render(this.scene, this.camera)
+    return this.dieResult(die, existing)
+  }
+
   async add(
     notationString: unknown,
     options: RollOptions = {},
@@ -1800,6 +2035,21 @@ class DiceBox {
       if (!existing) this.notationVectors = throwNotation ?? null
       onSpawned?.()
       return undefined
+    }
+
+    // Seed in the middle: drop straight down from above center rather than
+    // tumbling in from the edge, so the die comes to rest near the center.
+    if (options.center) {
+      const spread = this.baseScale * 0.9
+      throwNotation.vectors.forEach((vector, i) => {
+        vector.pos = { x: i * spread, y: 0, z: 220 }
+        vector.velocity = { x: 0, y: 0, z: 0 }
+        vector.angle = {
+          x: Math.random() * 3,
+          y: Math.random() * 3,
+          z: Math.random() * 3,
+        }
+      })
     }
 
     const deterministic = this.isDeterministic(throwNotation)
