@@ -7,8 +7,8 @@ import { DicePreferencesButton } from '@/components/dice-preferences'
 import { CustomActionsLayer } from '@/components/room/custom-actions-layer'
 import { DiceInteractionLayer } from '@/components/room/dice-interaction-layer'
 import { RoomView } from '@/components/room/room-view'
+import { useFlickableRollLog } from '@/hooks/use-flickable-roll-log'
 import { usePersistedChats } from '@/hooks/use-persisted-chats'
-import { usePersistedRolls } from '@/hooks/use-persisted-rolls'
 import { useRollExecutor } from '@/hooks/use-roll-executor'
 import { useUserProfile } from '@/hooks/use-user-profile'
 import type { ExampleConfig } from './examples-config'
@@ -73,21 +73,25 @@ export function ExampleRoom({
   example,
 }: Readonly<{ userId: string; example: ExampleConfig }>) {
   const { profile } = useUserProfile()
-  const { rolls, append: appendRoll } = usePersistedRolls(
-    `dice-log:rolls:${example.slug}`,
-  )
+  const {
+    rolls,
+    append: appendRoll,
+    submitRoll,
+    registerGrab,
+    registerReroll,
+  } = useFlickableRollLog(`dice-log:rolls:${example.slug}`)
   const { chats, append: appendChat } = usePersistedChats(
     `dice-log:chat:${example.slug}`,
   )
 
-  // Flickable pages drive their log from engine events (grab + table-at-rest)
-  // instead of the throw result, so the initial roll logs once the dice settle.
+  // Flickable pages log one message per roll, but hold a roll whose die is
+  // grabbed/flicked until that die re-settles (submitRoll); flicks then update
+  // the owning message in place. Non-flickable pages append the throw result.
   const flickable = !!example.renderer.enableDiceDrag
-  const noop = useCallback(() => {}, [])
 
   const { requestRoll, busy } = useRollExecutor({
     userId,
-    onLocalResult: flickable ? noop : appendRoll,
+    onLocalResult: flickable ? submitRoll : appendRoll,
     deterministic: example.deterministic,
     removal: example.removal,
     enableFlickOnSettled: example.enableFlickOnSettled,
@@ -98,23 +102,25 @@ export function ExampleRoom({
     [userId, profile?.name, profile?.image],
   )
 
-  // The moment a die is grabbed: log just that die (the face it was grabbed on).
+  // The moment a die is grabbed: post its grabbed badge entry and mark it
+  // in-flight so its roll's message waits for the flick to settle.
   const handleGrabbed = useCallback(
-    (die: DieEvent) => appendRoll(grabbedEntry(die, roller)),
-    [appendRoll, roller],
-  )
-
-  // The whole table came to rest (initial roll or a flick): log every die.
-  const handleSettled = useCallback(
-    (dice: DieRoll[]) => {
-      const entry = diceEntry(dice, roller)
-      if (entry) appendRoll(entry)
+    (die: DieEvent) => {
+      registerGrab(die.dieId)
+      appendRoll(grabbedEntry(die, roller))
     },
-    [appendRoll, roller],
+    [appendRoll, registerGrab, roller],
   )
 
-  // Custom-actions reroll: log the rerolled die.
-  const handleReroll = useCallback(
+  // A flick settled: feed the new face values back so the owning roll posts (or
+  // updates) with the flicked value.
+  const handleFlickReroll = useCallback(
+    (dice: DieRoll[]) => registerReroll(dice),
+    [registerReroll],
+  )
+
+  // Custom-actions reroll: log the rerolled die as its own entry.
+  const handleCustomReroll = useCallback(
     (dice: DieRoll[]) => {
       const entry = diceEntry(dice, roller)
       if (entry) appendRoll(entry)
@@ -142,7 +148,7 @@ export function ExampleRoom({
         chats={chats}
         onRollRequest={requestRoll}
         onSendMessage={handleSendMessage}
-        disabled={busy}
+        disabled={flickable ? false : busy}
         header={
           <ExampleHeader
             title={example.label}
@@ -154,12 +160,15 @@ export function ExampleRoom({
       {example.interaction === 'popover' && (
         <DiceInteractionLayer
           onGrabbed={flickable ? handleGrabbed : undefined}
-          onSettled={flickable ? handleSettled : undefined}
+          onReroll={flickable ? handleFlickReroll : undefined}
           flickable={flickable}
         />
       )}
       {example.interaction === 'custom' && (
-        <CustomActionsLayer onReroll={handleReroll} removal={example.removal} />
+        <CustomActionsLayer
+          onReroll={handleCustomReroll}
+          removal={example.removal}
+        />
       )}
     </>
   )

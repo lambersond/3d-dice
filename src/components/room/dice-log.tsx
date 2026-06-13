@@ -19,11 +19,23 @@ export function DiceLog({ rolls, chats, myRollerId }: Readonly<Props>) {
   const ref = useRef<HTMLDivElement>(null)
 
   const items: readonly LogItem[] = useMemo(() => {
-    const merged: LogItem[] = [
-      ...rolls.map<LogItem>(r => ({ kind: 'roll', data: r })),
-      ...chats.map<LogItem>(c => ({ kind: 'chat', data: c })),
-    ]
-    merged.sort((a, b) => a.data.at - b.data.at)
+    // `rolls` and `chats` each arrive in append order. Merge them into one
+    // timeline that keeps that order within each stream — so a flickable roll's
+    // grabbed badge stays where it was added rather than being re-sorted to the
+    // bottom by its (later) timestamp — and uses `at` only to decide which
+    // stream's next entry comes first.
+    const merged: LogItem[] = []
+    let i = 0
+    let j = 0
+    while (i < rolls.length && j < chats.length) {
+      if (rolls[i].at <= chats[j].at) {
+        merged.push({ kind: 'roll', data: rolls[i++] })
+      } else {
+        merged.push({ kind: 'chat', data: chats[j++] })
+      }
+    }
+    while (i < rolls.length) merged.push({ kind: 'roll', data: rolls[i++] })
+    while (j < chats.length) merged.push({ kind: 'chat', data: chats[j++] })
     return merged
   }, [rolls, chats])
 

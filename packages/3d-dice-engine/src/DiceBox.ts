@@ -1136,7 +1136,7 @@ class DiceBox {
     if (atRest === this.tableAtRest) return
     this.tableAtRest = atRest
     if (!atRest) return
-    const results = this.collapsePercentiles(this.diceList)
+    const results = this.diceList.map((die, id) => this.dieResult(die, id))
     this.onSettled(results)
     this.dispatchDiceEvent('diceSettled', results)
   }
@@ -1382,50 +1382,6 @@ class DiceBox {
   private combineD100(tens: number, ones: number): number {
     const value = (tens % 100) + (ones % 10)
     return value === 0 ? 100 : value
-  }
-
-  // Build a single combined d100 result for a percentile pair, using stored
-  // faces when present and falling back to the live up-face (e.g. mid-roll).
-  private percentileResult(
-    die: DiceMesh,
-    partner: DiceMesh,
-    id: number,
-  ): DiceResult {
-    const tens = die.notation.type === 'd100' ? die : partner
-    const ones = die.notation.type === 'd100' ? partner : die
-    const tensVal = tens.result.at(-1)?.value ?? (tens.getFaceValue().value as number)
-    const onesVal = ones.result.at(-1)?.value ?? (ones.getFaceValue().value as number)
-    const value = this.combineD100(tensVal, onesVal)
-    const last = die.result.at(-1)
-    return {
-      type: 'd100',
-      sides: 100,
-      id,
-      dieId: tens.notation.index,
-      value,
-      label: `${value}`,
-      reason: last?.reason ?? 'unsettled',
-    }
-  }
-
-  // Map dice to results, folding each percentile pair into one d100 entry (and
-  // dropping the partner). Non-percentile dice pass through dieResult unchanged.
-  private collapsePercentiles(dice: DiceMesh[]): DiceResult[] {
-    const seen = new Set<DiceMesh>()
-    const results: DiceResult[] = []
-    for (const die of dice) {
-      if (seen.has(die)) continue
-      const id = this.diceList.indexOf(die)
-      const partner = die.percentilePartner
-      if (partner && dice.includes(partner)) {
-        seen.add(die)
-        seen.add(partner)
-        results.push(this.percentileResult(die, partner, id))
-      } else {
-        results.push(this.dieResult(die, id))
-      }
-    }
-    return results
   }
 
   private buildDiceEventData(die: DiceMesh): DiceEventData {
@@ -1935,7 +1891,9 @@ class DiceBox {
     return new Promise<DiceResult[]>(resolve => {
       this.throwGroups.push(
         this.makeGroup(dice, this.resolveRemoval(options.removal), () => {
-          const results = this.collapsePercentiles(dice)
+          const results = dice.map(die =>
+            this.dieResult(die, this.diceList.indexOf(die)),
+          )
           this.onRerollComplete(results)
           document.dispatchEvent(
             new CustomEvent('rerollComplete', { detail: results }),
