@@ -183,18 +183,12 @@ class DiceBox {
   private dragNdc?: THREE.Vector2
   private tablePlane?: THREE.Plane
   private dragging: DiceMesh | null = null
-  // The percentile partner picked up alongside `dragging` (a d100 pair grabs
-  // both dice); it tracks the cursor at a fixed offset and rerolls together.
   private draggingPartner: DiceMesh | null = null
   private dragPartnerOffset = { x: 0, y: 0 }
-  // Dice added via right-click while holding: carried (frozen) in a ring around
-  // the held die and dropped together with it on release. Each unit is one die
-  // (or a percentile pair); offsets are relative to the held die's position.
   private carriedUnits: DiceMesh[][] = []
   private readonly carriedOffset = new Map<DiceMesh, { x: number; y: number }>()
   private dragRestZ = 0
   private dragSamples: { x: number; y: number; t: number }[] = []
-  // True while every die on the table is settled at rest; drives onSettled.
   private tableAtRest = false
   private onPointerDownBound?: (event: PointerEvent) => void
   private onPointerMoveBound?: (event: PointerEvent) => void
@@ -338,18 +332,13 @@ class DiceBox {
     if (this.raycaster) return
     this.raycaster = new THREE.Raycaster()
     this.mouse = new THREE.Vector2()
-    // Listen on the window, not the container: core mounts the canvas inside a
-    // full-viewport `pointer-events:none` overlay, so the element itself never
-    // receives pointer events. We hit-test against the dice and only swallow an
-    // event when it actually lands on a die, which keeps the app UI beneath the
-    // overlay fully interactive.
+
     if (this.enableDiceSelection) {
       this.onMouseMoveBound = (event: MouseEvent) => this.onMouseMove(event)
       globalThis.addEventListener('mousemove', this.onMouseMoveBound)
     }
+
     if (this.enableDiceDrag) {
-      // The drag gesture owns tap-to-reroll too, so we use pointer events
-      // (mouse + touch) instead of a separate click listener.
       this.dragNdc = new THREE.Vector2()
       this.tablePlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
       this.onPointerDownBound = (event: PointerEvent) => this.onPointerDown(event)
@@ -359,10 +348,10 @@ class DiceBox {
       globalThis.addEventListener('pointermove', this.onPointerMoveBound, true)
       globalThis.addEventListener('pointerup', this.onPointerUpBound, true)
       if (this.enableDiceAdd) {
-        // Right-click while holding a die drops another of the same type.
         this.onContextMenuBound = (event: MouseEvent) => this.onContextMenu(event)
         globalThis.addEventListener('contextmenu', this.onContextMenuBound, true)
       }
+
     } else if (this.enableDiceSelection) {
       this.onMouseClickBound = (event: MouseEvent) => this.onMouseClick(event)
       globalThis.addEventListener('click', this.onMouseClickBound, true)
@@ -1033,7 +1022,6 @@ class DiceBox {
   }
 
   private playCollisionSound(speed: number, sound?: HTMLAudioElement): void {
-    // don't bother playing at low speeds
     if (speed < 250 || !sound) return
     sound.volume = Math.min(speed / 8000, this.volume / 100)
     sound.play().catch(() => {})
@@ -1043,7 +1031,6 @@ class DiceBox {
     return false
   }
 
-  // A die is "held" while it (or its percentile partner) is under the pointer.
   private isHeld(die: DiceMesh): boolean {
     return this.dragging === die || this.draggingPartner === die
   }
@@ -1052,8 +1039,6 @@ class DiceBox {
     dicemesh: DiceMesh,
     forcedFinish: boolean,
   ): 'awake' | 'rethrow' | 'settled' {
-    // A die held by the pointer is KINEMATIC but must not count as settled, so
-    // its group stays open and onSettled waits until it's released and rests.
     if (this.isHeld(dicemesh) && !forcedFinish) return 'awake'
 
     const sleepState = CANNON.Body.SLEEPING
@@ -1131,8 +1116,6 @@ class DiceBox {
       this.running = false
       this.rolling = false
       this.animstate = 'afterthrow'
-      // Only "empty" when no dice remain — persisted dice drop their group but
-      // stay on the table, and onEmpty (which hides the overlay) must not fire.
       if (this.diceList.length === 0) this.onEmpty()
       this.renderer.render(this.scene, this.camera)
       return
@@ -1148,9 +1131,6 @@ class DiceBox {
     )
   }
 
-  // Fire onSettled once the whole table comes to rest: every die settled, none
-  // held, at least one die present. Re-arms whenever a die goes back into motion
-  // (a new throw, a flick, or releasing a grabbed die), so each settle fires once.
   private updateSettledState(): void {
     const atRest =
       this.diceList.length > 0 &&
@@ -1178,29 +1158,33 @@ class DiceBox {
       }
     }
 
-    // A die held by the pointer means this throw isn't at rest: un-settle the
-    // group so its dice (the held one and its roll-mates) aren't removed until
-    // the die is released and everything settles again. The removal timer
-    // restarts from the next settle.
     if (this.dragging && group.dice.includes(this.dragging)) {
       group.settledAt = null
       return true
     }
 
-    // Persisting dispositions keep the dice in `diceList` and drop the group so
-    // the animation loop can idle: `none` leaves them where they landed (and
-    // records that spot as home); `reset` returns them home after a short dwell.
+    return this.serviceRemoval(group, now, group.settledAt)
+  }
+
+  private serviceRemoval(
+    group: ThrowGroup,
+    now: number,
+    settledAt: number,
+  ): boolean {
     if (group.removal.style === 'none') {
       for (const die of group.dice) this.recordPlacement(die)
       return false
     }
     if (group.removal.style === 'reset') {
-      if (now - group.settledAt < group.removal.dwellMs) return true
+      if (now - settledAt < group.removal.dwellMs) return true
       for (const die of group.dice) this.resetToPlacement(die)
       return false
     }
+    return this.serviceExit(group, now, settledAt)
+  }
 
-    if (!group.exiting && now - group.settledAt >= group.removal.dwellMs) {
+  private serviceExit(group: ThrowGroup, now: number, settledAt: number): boolean {
+    if (!group.exiting && now - settledAt >= group.removal.dwellMs) {
       group.exiting = true
       group.exitStart = now
       for (const die of group.dice) die.body.collisionResponse = false
@@ -1243,8 +1227,6 @@ class DiceBox {
     return this.getNotationVectors(notation, vector, boost, dist)
   }
 
-  // Drop the hovered die (if any) and tell listeners, so a popover bound to the
-  // hover state doesn't linger once the die it points at is gone.
   private clearHover(): void {
     if (!this.hoveredDice) return
     this.hoveredDice = null
@@ -1324,7 +1306,6 @@ class DiceBox {
     if (die.body) this.world.removeBody(die.body)
   }
 
-  // Snapshot a settled die's resting transform as its home (for `reset`).
   private recordPlacement(die: DiceMesh): void {
     const p = die.body.position
     const q = die.body.quaternion
@@ -1334,7 +1315,6 @@ class DiceBox {
     }
   }
 
-  // Send a die back to its recorded home, at rest. No-op if it has no home.
   private resetToPlacement(die: DiceMesh): void {
     const placement = die.placement
     if (!placement) return
@@ -1374,8 +1354,6 @@ class DiceBox {
   }
 
   private dieResult(die: DiceMesh, id: number): DiceResult {
-    // A die may have no stored result yet if a group is force-resolved before
-    // it settles (e.g. clearDice/dispose mid-roll); fall back rather than throw.
     const last = die.result.at(-1)
     return {
       type: die.shape,
@@ -1437,27 +1415,18 @@ class DiceBox {
   }
 
   private isSelectableDie(die: DiceMesh): boolean {
-    // Selectable once the die has come to rest with a stored result and is not
-    // mid-reroll. Per-throw removal keeps the animation loop (and `rolling`)
-    // alive through the dwell, so we gate on the die's own state, not `rolling`.
     return (
       this.diceList.includes(die) && die.result.length > 0 && !die.rerolling
     )
   }
 
   private isGrabbableDie(die: DiceMesh): boolean {
-    // Never grabbable unless the throw is flickable (drag on, non-deterministic).
-    // In motion (no settled result / mid-flick) → always grabbable; resting →
-    // only when the throw opted into flick-on-settled.
     if (!die.flickable) return false
     return this.isSelectableDie(die)
       ? die.flickOnSettled
       : this.diceList.includes(die)
   }
 
-  // Event payload for a grab: the die's *current* up-face (getFaceValue), not a
-  // stored result, so a die caught mid-roll reports the face it was grabbed on.
-  // A percentile grab reports the combined 1-100 value of the pair as one d100.
   private buildGrabEventData(die: DiceMesh): DiceEventData {
     const partner = die.percentilePartner
     if (partner && this.diceList.includes(partner)) {
@@ -1479,8 +1448,6 @@ class DiceBox {
     }
   }
 
-  // Grab payload for a percentile pair: the combined 1-100 value of the tens and
-  // ones up-faces, reported as a single d100 anchored on the grabbed die.
   private buildPercentileGrabData(
     die: DiceMesh,
     partner: DiceMesh,
@@ -1545,10 +1512,10 @@ class DiceBox {
       !this.enableDiceSelection ||
       !this.hoveredDice ||
       !this.isSelectableDie(this.hoveredDice)
-    )
+    ) {
       return
-    // Only consume the click when it actually lands on a die; otherwise it falls
-    // through to whatever app UI sits beneath the overlay.
+    }
+
     event.preventDefault()
     event.stopPropagation()
     const data = this.buildDiceEventData(this.hoveredDice)
@@ -1574,7 +1541,6 @@ class DiceBox {
       .find(die => this.isGrabbableDie(die))
   }
 
-  // Project a pointer onto the table (z=0) plane to a world (x,y) point.
   private pointerToTable(
     clientX: number,
     clientY: number,
@@ -1587,10 +1553,6 @@ class DiceBox {
     return hit ? { x: hit.x, y: hit.y } : null
   }
 
-  // When `die` is half of a percentile pair, freeze its partner and snap it
-  // right beside the grabbed die (rather than leaving it wherever it landed),
-  // banking its grabbed face if it was in motion, so the pair moves and rerolls
-  // together as a tidy unit.
   private grabPercentilePartner(die: DiceMesh): void {
     const partner = die.percentilePartner
     if (!partner || !this.diceList.includes(partner)) return
@@ -1602,8 +1564,6 @@ class DiceBox {
     partner.body.velocity.setZero()
     partner.body.angularVelocity.setZero()
     if (partnerInMotion) partner.storeRolledValue('grabbed')
-    // Place it beside the grabbed die now so the snap is visible on grab, even
-    // when the physics loop is idle (a persistent tray's dice are asleep).
     const px = die.body.position.x + this.dragPartnerOffset.x
     const py = die.body.position.y + this.dragPartnerOffset.y
     partner.body.position.set(px, py, this.dragRestZ)
@@ -1611,8 +1571,6 @@ class DiceBox {
     this.renderer.render(this.scene, this.camera)
   }
 
-  // Approximate world-space radius of a die (its bounding sphere at current
-  // scale), used to seat a percentile partner adjacent without overlap.
   private dieRadius(die: DiceMesh): number {
     if (!die.geometry.boundingSphere) die.geometry.computeBoundingSphere()
     const radius = die.geometry.boundingSphere?.radius ?? this.baseScale * 0.45
@@ -1627,8 +1585,6 @@ class DiceBox {
     event.preventDefault()
     event.stopPropagation()
 
-    // Capture motion state before we freeze the die: a die caught mid-roll or
-    // mid-flick (not at rest) banks its grabbed face below.
     const inMotion = !this.isSelectableDie(die)
 
     this.dragging = die
@@ -1638,29 +1594,19 @@ class DiceBox {
       ? [{ x: point.x, y: point.y, t: event.timeStamp }]
       : []
 
-    // Hold the die still under the cursor while it is dragged.
     die.rerolling = false
     die.body.type = CANNON.Body.KINEMATIC
     die.body.velocity.setZero()
     die.body.angularVelocity.setZero()
 
-    // Caught in motion (mid-roll or mid-flick): bank the grabbed face so the
-    // interrupted throw/flick reports that face (reason 'grabbed') instead of a
-    // stale value when its group resolves. The flick stores the new value via
-    // resolveDie's reroll branch, so the final value is unaffected.
     if (inMotion) die.storeRolledValue('grabbed')
 
-    // A percentile pair is picked up as a unit: freeze the partner too and have
-    // it follow the cursor at its current offset, so both reroll on release.
     this.grabPercentilePartner(die)
 
-    // Announce the grab with the face value at grab time. Holding the die keeps
-    // its group unsettled (see resolveDie), so onSettled won't fire until release.
     const grabData = this.buildGrabEventData(die)
     this.onDiceGrabbed(grabData)
     this.dispatchDiceEvent('diceGrabbed', grabData)
 
-    // Drop any hover popover the moment a drag starts.
     if (this.hoveredDice) {
       this.hoveredDice = null
       this.onDiceHover(null)
@@ -1677,7 +1623,6 @@ class DiceBox {
     if (!point) return
     die.body.position.set(point.x, point.y, this.dragRestZ)
     die.position.set(point.x, point.y, this.dragRestZ)
-    // Carry a percentile partner alongside at its fixed offset.
     const partner = this.draggingPartner
     if (partner) {
       const px = point.x + this.dragPartnerOffset.x
@@ -1685,12 +1630,10 @@ class DiceBox {
       partner.body.position.set(px, py, this.dragRestZ)
       partner.position.set(px, py, this.dragRestZ)
     }
-    // Carry the ring of right-click-added dice around the cursor.
+
     if (this.carriedUnits.length > 0) this.placeCarriedAround(point.x, point.y)
     this.dragSamples.push({ x: point.x, y: point.y, t: event.timeStamp })
     if (this.dragSamples.length > 6) this.dragSamples.shift()
-    // Render directly so the held die tracks the cursor even while the physics
-    // loop is idle (a persistent tray's dice are asleep between flicks).
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -1705,10 +1648,8 @@ class DiceBox {
 
     const flick = this.flickVelocity(this.dragSamples)
     this.dragSamples = []
-    // Drop any right-click-added ring together with the held die.
     this.releaseCarried(flick)
 
-    // Reroll the grabbed die and, for a percentile, its partner together.
     const ids = [this.diceList.indexOf(die)]
     if (partner) {
       const partnerId = this.diceList.indexOf(partner)
@@ -1716,11 +1657,8 @@ class DiceBox {
     }
     if (ids[0] < 0) return
 
-    // Disposition is configured per box: persistent boxes return the die home,
-    // transient boxes let it leave on the normal exit animation.
     const removal = this.dragRemoval
-    // A flick launches in the drag direction; a tap (no flick) uses the default
-    // straight-up reroll velocity.
+
     void (flick
       ? this.reroll(ids, {
           velocity: { x: flick.x, y: flick.y, z: DRAG_LAUNCH_Z },
@@ -1729,9 +1667,6 @@ class DiceBox {
       : this.reroll(ids, { removal }))
   }
 
-  // Right-click while holding a die adds another of the same type to the ring
-  // carried around it (dropped together on release). Ignored — and the native
-  // menu left alone — when nothing is held.
   private onContextMenu(event: MouseEvent): void {
     if (!this.dragging) return
     event.preventDefault()
@@ -1739,9 +1674,6 @@ class DiceBox {
     this.addCarried(this.dragging)
   }
 
-  // Spawn a frozen die of the held die's type — or a percentile pair — and add it
-  // to the carried ring around the held die. It tracks the cursor with the rest
-  // and is thrown/logged only when the grab ends (see releaseCarried).
   private addCarried(held: DiceMesh): void {
     const isPercentile =
       held.percentilePartner !== undefined || held.notation.type === 'd100'
@@ -1753,8 +1685,6 @@ class DiceBox {
     this.renderer.render(this.scene, this.camera)
   }
 
-  // Spawn one unit of dice held still (KINEMATIC) and flickable, with no throw
-  // group, so they neither fall nor settle until released.
   private spawnCarriedUnit(notationString: string): DiceMesh[] {
     const throwNotation = this.startClickThrow(notationString)
     if (!throwNotation || throwNotation.error || throwNotation.vectors.length === 0) {
@@ -1776,9 +1706,6 @@ class DiceBox {
     return unit
   }
 
-  // Arrange the carried units in concentric rings around the held die: fill the
-  // innermost ring, then start a new (larger) ring once it's full, rather than
-  // ballooning a single ring's radius. Offsets are relative to the held die.
   private layoutCarried(): void {
     const held = this.dragging
     if (!held) return
@@ -1803,8 +1730,6 @@ class DiceBox {
     this.placeCarriedAround(x, y)
   }
 
-  // Record one carried unit's offset at (radius, angle) from the held die; a
-  // percentile pair is split apart along the ring's tangent.
   private placeCarriedUnit(
     unit: DiceMesh[],
     radius: number,
@@ -1823,8 +1748,6 @@ class DiceBox {
     this.carriedOffset.set(unit[1], { x: cx - tx, y: cy - ty })
   }
 
-  // Position every carried die at its ring offset from a center point, lifted
-  // above the table so a release lets them drop.
   private placeCarriedAround(centerX: number, centerY: number): void {
     const z = this.dragRestZ + CARRY_LIFT
     for (const unit of this.carriedUnits) {
@@ -1837,8 +1760,6 @@ class DiceBox {
     }
   }
 
-  // Throw the carried units (dropping/flicking with the held die) and report
-  // each unit via onDiceAdded as it settles, so each logs its own entry.
   private releaseCarried(flick: { x: number; y: number } | null): void {
     const units = this.carriedUnits
     this.carriedUnits = []
@@ -1871,8 +1792,6 @@ class DiceBox {
     this.ensureAnimating()
   }
 
-  // Average drag velocity over the recent samples, in world units/sec. Returns
-  // null when the pointer barely moved (treat as a tap, not a flick).
   private flickVelocity(
     samples: { x: number; y: number; t: number }[],
   ): { x: number; y: number } | null {
@@ -1915,7 +1834,7 @@ class DiceBox {
       for (let index = counter; index <= endCount; index++) {
         const die = this.diceList[counter]
         const last = die?.result.at(-1)
-        // Skip dice with no settled value (e.g. force-resolved on teardown).
+
         if (!last || last.reason === 'remove') {
           counter++
           continue
@@ -1969,7 +1888,6 @@ class DiceBox {
       return undefined
     }
 
-    // Normalized (-1..1) → world; 0.9 keeps it inside the walls (at ±0.93).
     const wx = x * this.display.containerWidth * 0.9
     const wy = y * this.display.containerHeight * 0.9
     const vector = throwNotation.vectors[0]
@@ -1991,13 +1909,10 @@ class DiceBox {
     die.flickable = flickable
     die.flickOnSettled = flickable
 
-    // Settle flat in place (synchronous, no animation), swap the up-face to the
-    // requested value, and record it.
     this.simulateAddedDice(existing)
     this.swapDiceFace(die, value)
     die.storeRolledValue('placed')
 
-    // Pin to the exact coordinate at rest, keeping the settled (flat) rotation.
     const z = die.body.position.z
     const q = die.body.quaternion
     die.rerolling = false
@@ -2037,8 +1952,6 @@ class DiceBox {
       return undefined
     }
 
-    // Seed in the middle: drop straight down from above center rather than
-    // tumbling in from the edge, so the die comes to rest near the center.
     if (options.center) {
       const spread = this.baseScale * 0.9
       throwNotation.vectors.forEach((vector, i) => {
@@ -2057,9 +1970,6 @@ class DiceBox {
     for (const vectordata of throwNotation.vectors) this.spawnDice(vectordata)
     const groupDice = this.diceList.slice(existing)
 
-    // Deterministic throws are never flickable. Grab-while-rolling needs only
-    // `enableDiceDrag`; `enableFlickOnSettled` additionally keeps resting dice
-    // grabbable.
     const flickable = this.enableDiceDrag && !deterministic
     const flickOnSettled = flickable && enableFlickOnSettled === true
     for (const die of groupDice) {
@@ -2114,9 +2024,6 @@ class DiceBox {
       .map(id => this.diceList[id])
       .filter((die): die is DiceMesh => Boolean(die))
     if (dice.length === 0) return []
-    // Hand these dice to a fresh group: pull them out of whatever group is
-    // counting down to removal and undo any in-progress exit, so the new throw
-    // alone governs their lifecycle (otherwise the old group still removes them).
     this.detachFromGroups(dice)
     const velocity = options.velocity ?? { x: 0, y: 0, z: 3000 }
     const angular = options.angular ?? { x: 25, y: 25, z: 25 }
@@ -2160,7 +2067,6 @@ class DiceBox {
     this.throwGroups = this.throwGroups.filter(group => {
       group.dice = group.dice.filter(die => !detaching.has(die))
       if (group.dice.length > 0) return true
-      // Drop a now-empty group, but settle its promise if it never resolved.
       if (!group.resolved) {
         group.resolved = true
         group.resolve()
