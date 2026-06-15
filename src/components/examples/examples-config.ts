@@ -3,7 +3,7 @@ import type {
   RemovalOptions,
 } from '@lambersond/3d-dice-core'
 
-export type ExampleInteraction = 'popover' | 'custom' | 'none' | 'seed'
+export type ExampleInteraction = 'popover' | 'custom' | 'none' | 'seed' | 'vtt'
 
 export type ExampleConfig = {
   slug: string
@@ -87,6 +87,24 @@ export const EXAMPLES: ExampleConfig[] = [
       dragRemoval: { style: 'none' },
     },
     interaction: 'seed',
+  },
+  {
+    slug: 'vtt',
+    label: 'VTT',
+    category: 'Advanced',
+    description:
+      'A virtual-tabletop layout: a solid play area with a floating roll log. Grab a die from the table and flick to roll it (right-click while holding to add another), or build a roll in the log with advantage/disadvantage and a modifier. Each throw is its own log entry.',
+    deterministic: false,
+    persistent: true,
+    removal: TRANSIENT,
+    renderer: {
+      enableDiceSelection: true,
+      enableDiceDrag: true,
+      enableDiceAdd: true,
+      dragRemoval: { style: 'none' },
+      dieScale: 65,
+    },
+    interaction: 'vtt',
   },
   {
     slug: 'custom-actions',

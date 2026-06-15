@@ -1588,7 +1588,15 @@ class DiceBox {
   }
 
   private grabPercentilePartner(die: DiceMesh): void {
-    const partner = die.percentilePartner
+    let partner = die.percentilePartner
+    if (!partner || !this.diceList.includes(partner)) {
+      // A lone placed d100 (the tens die) has no ones die yet; spawn and link one
+      // so grabbing/flicking it rolls a full percentile, not just the tens.
+      partner =
+        die.notation.type === 'd100'
+          ? this.spawnPercentileOnes(die)
+          : undefined
+    }
     if (!partner || !this.diceList.includes(partner)) return
     const partnerInMotion = !this.isSelectableDie(partner)
     this.draggingPartner = partner
@@ -1603,6 +1611,35 @@ class DiceBox {
     partner.body.position.set(px, py, this.dragRestZ)
     partner.position.set(px, py, this.dragRestZ)
     this.renderer.render(this.scene, this.camera)
+  }
+
+  // Spawn a ones (`d10`) die and pair it with a tens (`d100`) die, so a placed
+  // percentile that started life as a lone tens can be grabbed/flicked as a full
+  // percentile. Mirrors spawnCarriedUnit's spawn setup; grabPercentilePartner
+  // then positions the ones beside the tens.
+  private spawnPercentileOnes(tens: DiceMesh): DiceMesh | undefined {
+    const throwNotation = this.startClickThrow('1d10')
+    if (
+      !throwNotation ||
+      throwNotation.error ||
+      throwNotation.vectors.length === 0
+    ) {
+      return undefined
+    }
+    const existing = this.diceList.length
+    this.setThrowGroup(false)
+    for (const vectordata of throwNotation.vectors) this.spawnDice(vectordata)
+    const ones = this.diceList[existing]
+    if (!ones) return undefined
+    ones.flickable = this.enableDiceDrag
+    ones.flickOnSettled = this.enableDiceDrag
+    ones.rerolling = false
+    ones.body.type = CANNON.Body.KINEMATIC
+    ones.body.velocity.setZero()
+    ones.body.angularVelocity.setZero()
+    tens.percentilePartner = ones
+    ones.percentilePartner = tens
+    return ones
   }
 
   private dieRadius(die: DiceMesh): number {

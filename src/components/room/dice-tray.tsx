@@ -1,12 +1,6 @@
 'use client'
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ComponentType,
-  type SVGAttributes,
-} from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   DIE_SIDES,
   type DieSides,
@@ -16,40 +10,8 @@ import {
 import { useTray } from '@lambersond/3d-dice-react'
 import clsx from 'clsx'
 import { Dices, InfoIcon } from 'lucide-react'
-import {
-  D4Icon,
-  D6Icon,
-  D8Icon,
-  D10Icon,
-  D12Icon,
-  D20Icon,
-} from '@/components/icons'
+import { DieIcon } from '@/components/icons'
 import { Popover } from '@/components/popover'
-
-const DIE_ICON: Record<
-  Exclude<DieSides, 100>,
-  ComponentType<SVGAttributes<SVGElement>>
-> = {
-  4: D4Icon,
-  6: D6Icon,
-  8: D8Icon,
-  10: D10Icon,
-  12: D12Icon,
-  20: D20Icon,
-}
-
-function DieIcon({ sides }: Readonly<{ sides: DieSides }>) {
-  if (sides === 100) {
-    return (
-      <span className='inline-flex items-center -space-x-1'>
-        <D10Icon className='size-5' />
-        <D10Icon className='size-5' />
-      </span>
-    )
-  }
-  const Icon = DIE_ICON[sides]
-  return <Icon className='size-5' />
-}
 
 type Props = {
   onRoll: (request: RollRequest) => void

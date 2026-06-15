@@ -7,8 +7,27 @@ import {
   localStoragePreferences,
 } from '@lambersond/3d-dice-react'
 import { ExampleRoom } from './example-room'
-import { findExample } from './examples-config'
+import { findExample, type ExampleConfig } from './examples-config'
 import { SeedFlickRoom } from './seed-flick-room'
+import { VttRoom } from './vtt-room'
+
+function renderInteraction(
+  interaction: ExampleConfig['interaction'],
+  userId: string,
+  example: ExampleConfig,
+) {
+  switch (interaction) {
+    case 'seed': {
+      return <SeedFlickRoom userId={userId} example={example} />
+    }
+    case 'vtt': {
+      return <VttRoom userId={userId} example={example} />
+    }
+    default: {
+      return <ExampleRoom userId={userId} example={example} />
+    }
+  }
+}
 
 export function ExamplePage({
   userId,
@@ -24,11 +43,7 @@ export function ExamplePage({
   return (
     <DicePreferencesProvider storage={storage}>
       <DiceRendererProvider config={example.renderer}>
-        {example.interaction === 'seed' ? (
-          <SeedFlickRoom userId={userId} example={example} />
-        ) : (
-          <ExampleRoom userId={userId} example={example} />
-        )}
+        {renderInteraction(example.interaction, userId, example)}
       </DiceRendererProvider>
     </DicePreferencesProvider>
   )

@@ -198,6 +198,10 @@ export class DiceNotation {
   }
 
   static mergeNotation(prevNotation: any, newNotation: any) {
+    // A throw can join a table that carries no roll notation yet — e.g. one that
+    // only holds dice put down with place() (a placed palette). With nothing to
+    // merge into, the new throw's notation stands on its own.
+    if (!prevNotation) return newNotation
     // let our vectors combine
     return {
       ...prevNotation,

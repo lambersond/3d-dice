@@ -1,6 +1,6 @@
 {
   "name": "@lambersond/3d-dice-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-agnostic 3D dice rolling engine, parser, and renderer.",
   "license": "MIT",
   "type": "module",
