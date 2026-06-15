@@ -1,7 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useDiceRenderer, useDieEvents } from '@lambersond/3d-dice-react'
+import { themeToBoxConfig, type DieRoll } from '@lambersond/3d-dice-core'
+import {
+  useDicePreferences,
+  useDiceRenderer,
+  useDieEvents,
+} from '@lambersond/3d-dice-react'
 import { ExampleHeader, diceEntry } from './example-room'
 import { DiceInteractionLayer } from '@/components/room/dice-interaction-layer'
 import { RoomView } from '@/components/room/room-view'
@@ -9,7 +14,6 @@ import { usePersistedRolls } from '@/hooks/use-persisted-rolls'
 import { useUserProfile } from '@/hooks/use-user-profile'
 import type { ExampleConfig } from './examples-config'
 import type { RollerInfo } from '@/types/roll'
-import type { DieRoll } from '@lambersond/3d-dice-core'
 
 // A palette of every die type rests along the bottom, each showing its max
 // face. You grab one to roll it; placed (resting) dice carry reason 'placed' so
@@ -36,6 +40,7 @@ export function SeedFlickRoom({
 }: Readonly<{ userId: string; example: ExampleConfig }>) {
   const { profile } = useUserProfile()
   const { rolls, append } = usePersistedRolls(`dice-log:rolls:${example.slug}`)
+  const { theme } = useDicePreferences()
   const renderer = useDiceRenderer()
   const ready = renderer.isReady
 
@@ -61,13 +66,17 @@ export function SeedFlickRoom({
     }
   }, [renderer])
 
-  // Place the palette once the renderer is ready.
+  // Place the palette once the renderer is ready — but only after applying the
+  // current theme, so the placed dice are created with the selected colorset
+  // rather than the box's default (which the async theme load would otherwise
+  // miss for these already-created dice).
   useEffect(() => {
-    if (ready && !placed.current) {
-      placed.current = true
-      placePalette()
-    }
-  }, [ready, placePalette])
+    if (!ready || placed.current) return
+    placed.current = true
+    renderer
+      .updateConfig(themeToBoxConfig(theme))
+      .then(placePalette, placePalette)
+  }, [ready, theme, renderer, placePalette])
 
   // A drop settled: record only the dice that actually rolled (the grabbed die
   // and any added ring) — resting palette dice keep reason 'placed' — then clear

@@ -27,7 +27,6 @@ export type ExampleConfig = {
 const TRANSIENT: RemovalOptions = { style: 'shrink', dwellMs: 2000 }
 const TRANSIENT_LINGER: RemovalOptions = { style: 'shrink', dwellMs: 4000 }
 const PERSIST: RemovalOptions = { style: 'none' }
-const RESET: RemovalOptions = { style: 'reset', dwellMs: 1200 }
 
 export const EXAMPLES: ExampleConfig[] = [
   {
@@ -69,35 +68,6 @@ export const EXAMPLES: ExampleConfig[] = [
       enableDiceDrag: true,
       dragRemoval: TRANSIENT,
     },
-    interaction: 'popover',
-  },
-  {
-    slug: 'persistent-flickable',
-    label: 'Persistent · flickable',
-    category: 'Advanced',
-    description:
-      'Dice stay on the table. Hover to read, flick to reroll (the die returns to its spot and logs a new result). Use Clear to empty.',
-    deterministic: false,
-    persistent: true,
-    removal: PERSIST,
-    enableFlickOnSettled: true,
-    renderer: {
-      enableDiceSelection: true,
-      enableDiceDrag: true,
-      dragRemoval: RESET,
-    },
-    interaction: 'popover',
-  },
-  {
-    slug: 'persistent-static',
-    label: 'Persistent · static',
-    category: 'Advanced',
-    description:
-      'Dice stay on the table and can be hovered to read their value, but not flicked. Use Clear to empty.',
-    deterministic: false,
-    persistent: true,
-    removal: PERSIST,
-    renderer: { enableDiceSelection: true },
     interaction: 'popover',
   },
   {

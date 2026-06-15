@@ -155,6 +155,7 @@ class DiceBox {
   onSettled!: (results: DiceResult[]) => void
   enableDiceAdd!: boolean
   onDiceAdded!: (results: DiceResult[]) => void
+  barrier?: number
 
   container: HTMLElement
   dimensions: THREE.Vector2
@@ -399,6 +400,7 @@ class DiceBox {
       this.world.removeBody(this.box_body.bottomWall)
       this.world.removeBody(this.box_body.leftWall)
       this.world.removeBody(this.box_body.rightWall)
+      if (this.box_body.barrier) this.world.removeBody(this.box_body.barrier)
     }
 
     const desk_body_material = new CANNON.Material()
@@ -484,6 +486,23 @@ class DiceBox {
     )
     this.box_body.rightWall.position.set(-containerWidth * 0.93, 0, 0)
     this.world.addBody(this.box_body.rightWall)
+
+    // Optional interior barrier: a solid slab across the width at a normalized y,
+    // sitting from the desk up. Blocks rolling/flicked (DYNAMIC) dice from
+    // crossing; grabbed (KINEMATIC) dice pass through, so dice can be dragged over
+    // it but not roll back.
+    if (this.barrier !== undefined) {
+      const slabHalfZ = 140
+      const barrier = new CANNON.Body({
+        allowSleep: false,
+        mass: 0,
+        shape: new CANNON.Box(new CANNON.Vec3(containerWidth, 6, slabHalfZ)),
+        material: barrier_body_material,
+      })
+      barrier.position.set(0, this.barrier * containerHeight * 0.9, slabHalfZ)
+      this.world.addBody(barrier)
+      this.box_body.barrier = barrier
+    }
   }
 
   async loadTheme(themeConfig: ThemeConfig): Promise<void> {
@@ -1234,6 +1253,21 @@ class DiceBox {
     this.dispatchDiceEvent('diceHover', null)
   }
 
+  // Remove dice resting below a normalized y (the bottom/tray zone), leaving the
+  // rest in place. Used to restock a tray without disturbing a separate top zone.
+  clearBelow(normalizedY: number): void {
+    const worldY = normalizedY * this.display.containerHeight * 0.9
+    const removed = this.diceList.filter(die => die.body.position.y < worldY)
+    if (removed.length === 0) return
+    this.detachFromGroups(removed)
+    for (const die of removed) {
+      if (this.dragging === die) this.dragging = null
+      if (this.draggingPartner === die) this.draggingPartner = null
+      this.removeDie(die)
+    }
+    this.renderer.render(this.scene, this.camera)
+  }
+
   clearDice(): void {
     this.running = false
     this.dragging = null
@@ -1874,30 +1908,35 @@ class DiceBox {
   // Place a single die at a normalized (-1..1) table coordinate, resting flat
   // with `value` showing up. Synchronous (no tumble): the die is settled in
   // place, its up-face swapped to `value`, then frozen. `grabbable` only takes
-  // effect when the box has `enableDiceDrag`.
+  // effect when the box has `enableDiceDrag`. When `orientation` (degrees, yaw
+  // about the vertical axis) is given, the drop is deterministic and the die is
+  // spun to that yaw, so the same options always reproduce the same pose.
   place(options: {
     type: string
     value: number
     x: number
     y: number
     grabbable?: boolean
+    orientation?: number
   }): DiceResult | undefined {
-    const { type, value, x, y, grabbable } = options
+    const { type, value, x, y, grabbable, orientation } = options
     const throwNotation = this.startClickThrow(`1${type}`)
     if (!throwNotation || throwNotation.error || throwNotation.vectors.length === 0) {
       return undefined
     }
 
+    const fixedPose = typeof orientation === 'number'
     const wx = x * this.display.containerWidth * 0.9
     const wy = y * this.display.containerHeight * 0.9
     const vector = throwNotation.vectors[0]
     vector.pos = { x: wx, y: wy, z: 200 }
     vector.velocity = { x: 0, y: 0, z: 0 }
-    vector.angle = {
-      x: Math.random() * 2,
-      y: Math.random() * 2,
-      z: Math.random() * 2,
-    }
+    // A fixed pose drops from a fixed tilt with no spin, so the synchronous settle
+    // is reproducible; otherwise keep the lively random tumble.
+    vector.angle = fixedPose
+      ? { x: 0, y: 0, z: 0 }
+      : { x: Math.random() * 2, y: Math.random() * 2, z: Math.random() * 2 }
+    if (fixedPose) vector.axis = { x: 1, y: 0.7, z: 0.3, a: 0.1 }
 
     const existing = this.diceList.length
     this.setThrowGroup(false)
@@ -1912,6 +1951,14 @@ class DiceBox {
     this.simulateAddedDice(existing)
     this.swapDiceFace(die, value)
     die.storeRolledValue('placed')
+
+    // Spin the settled (flat) die about the vertical axis to the requested yaw;
+    // this keeps the up-face up and only rotates how the die reads.
+    if (fixedPose && orientation !== 0) {
+      const yaw = new CANNON.Quaternion()
+      yaw.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), (orientation * Math.PI) / 180)
+      yaw.mult(die.body.quaternion, die.body.quaternion)
+    }
 
     const z = die.body.position.z
     const q = die.body.quaternion

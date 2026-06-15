@@ -101,6 +101,7 @@ type DiceBoxInstance = {
   place?: (options: PlaceDieOptions) => unknown
   updateConfig?: (config: Record<string, unknown>) => Promise<void>
   clearDice?: () => void
+  clearBelow?: (normalizedY: number) => void
   dispose?: () => void
   renderer?: { domElement?: HTMLCanvasElement }
 }
@@ -111,6 +112,10 @@ export class DiceRenderer {
   private box: DiceBoxInstance | undefined
   private contextLost = false
   private building = false
+  // True only when this renderer created its overlay element (vs. an app
+  // pre-rendering the container by id); guards removal on dispose so React-owned
+  // containers aren't torn out from under React.
+  private ownsContainer = false
   // Bumped by dispose() to cancel an in-flight build whose container/box would
   // otherwise be torn down underneath it (e.g. navigating away mid-build).
   private generation = 0
@@ -218,6 +223,15 @@ export class DiceRenderer {
   }
 
   /**
+   * Remove dice resting below a normalized y (-1..1) — the bottom/tray zone —
+   * leaving dice above it in place (e.g. to restock a tray without disturbing a
+   * separate top zone held back by a `barrier`).
+   */
+  clearBelow(normalizedY: number): void {
+    this.box?.clearBelow?.(normalizedY)
+  }
+
+  /**
    * Drop a single grabbable die into the center of the table and leave it there
    * (persistent, flickable). Used by the center-seed flick interaction to place
    * the die you grab. Resolves once it has settled.
@@ -263,7 +277,9 @@ export class DiceRenderer {
   dispose(): void {
     this.generation += 1
     this.box?.dispose?.()
-    this.getContainer()?.remove()
+    // Only remove the overlay we created; an app-owned container is React's to
+    // unmount (removing it here would double-remove the node).
+    if (this.ownsContainer) this.getContainer()?.remove()
     this.box = undefined
     this.building = false
   }
@@ -356,6 +372,7 @@ export class DiceRenderer {
   private ensureContainer(): HTMLElement {
     let el = this.getContainer()
     if (!el) {
+      this.ownsContainer = true
       el = document.createElement('div')
       el.id = this.containerId
       // Default full-viewport, click-through overlay; `overlay` config can
@@ -451,6 +468,7 @@ export class DiceRenderer {
       gravity_multiplier: c.gravityMultiplier ?? 400,
       light_intensity: c.lightIntensity ?? 0.8,
       strength: c.strength ?? 1,
+      ...(typeof c.dieScale === 'number' ? { baseScale: c.dieScale } : {}),
       onEmpty: () => {
         const container = this.getContainer()
         if (container) container.style.opacity = '0'
@@ -458,6 +476,7 @@ export class DiceRenderer {
       enableDiceSelection: c.enableDiceSelection ?? false,
       enableDiceDrag: c.enableDiceDrag ?? false,
       enableDiceAdd: c.enableDiceAdd ?? false,
+      ...(typeof c.barrier === 'number' ? { barrier: c.barrier } : {}),
       ...(c.dragRemoval ? { dragRemoval: c.dragRemoval } : {}),
       onDiceHover: (data: DieEvent | null) => {
         for (const cb of this.hoverSubscribers) cb(data)

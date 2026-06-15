@@ -329,4 +329,10 @@ export interface DiceBoxConfig {
   enableDiceAdd: boolean
   /** Fires when a grab-to-add die (or percentile pair) settles, with its value(s). */
   onDiceAdded: (results: DiceResult[]) => void
+  /**
+   * Add a solid interior wall across the table at this normalized y (-1..1), so
+   * rolled/flicked dice can't cross it. Grabbed (dragged) dice pass through.
+   * Omit for no barrier.
+   */
+  barrier?: number
 }

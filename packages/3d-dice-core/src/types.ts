@@ -108,12 +108,19 @@ export type DiceRendererConfig = {
   lightIntensity?: number
   strength?: number
   shadows?: boolean
+  /** Relative die size (engine baseScale; default 100). Lower renders smaller dice. */
+  dieScale?: number
   /** Detect hover/click on visible dice; register handlers via onDieHover/onDieClick. */
   enableDiceSelection?: boolean
   /** Let dice be grabbed and flicked (drag-to-reroll); see onDieReroll. */
   enableDiceDrag?: boolean
   /** Right-click while holding a die drops another of the same type; see onDiceAdded. */
   enableDiceAdd?: boolean
+  /**
+   * Solid interior wall across the table at this normalized y (-1..1); rolled
+   * dice can't cross it, grabbed dice pass through. Omit for no barrier.
+   */
+  barrier?: number
   /** Disposition for a flicked/tapped die: `reset` (return home, for persistent
    * trays) or `shrink`/`fade` (leave, for transient). Defaults to `reset`. */
   dragRemoval?: RemovalOptions
@@ -132,6 +139,12 @@ export type PlaceDieOptions = {
   x: number
   y: number
   grabbable?: boolean
+  /**
+   * Yaw in degrees about the vertical axis. When set, the die is placed in a
+   * deterministic pose so the same options always reproduce the same look (same
+   * up-face and rotation); omit for a random orientation.
+   */
+  orientation?: number
 }
 
 /**
