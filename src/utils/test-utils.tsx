@@ -1,6 +1,5 @@
 import { RenderOptions, render as rtlRender } from '@testing-library/react'
 import { Options, userEvent } from '@testing-library/user-event'
-import { ModalProvider } from '@/components/modals/modal-provider'
 import type { ReactNode } from 'react'
 
 function TestProviders({ children }: Readonly<{ children: ReactNode }>) {
@@ -77,38 +76,6 @@ export const useUser = (
     user,
     ...rtlRender(element, { wrapper: TestProviders, ...renderOptions }),
   }
-}
-
-/**
- * This function is a custom render function that wraps the component with the ModalProvider.
- * @param ui - The component to be rendered.
- * @param options - The render options.
- * @returns The render result.
- *
- * @example
- * ```tsx
- * import { renderWithModalProvider } from '@/utils/test-utils'
- * import { Button } from './Button'
- *
- * it('should render the button', () => {
- *   const { getByText } = renderWithModalProvider(<Button>Click me</Button>)
- *
- *   expect(getByText('Click me')).toBeInTheDocument()
- * })
- * ```
- */
-export const renderWithModalProvider = (
-  ui: ReactNode,
-  options?: RenderOptions,
-) => {
-  return rtlRender(ui, {
-    wrapper: ({ children }) => (
-      <TestProviders>
-        <ModalProvider>{children}</ModalProvider>
-      </TestProviders>
-    ),
-    ...options,
-  })
 }
 
 export { mockFetch, mockManyFetch } from './mock-fetch'
