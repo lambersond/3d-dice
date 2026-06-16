@@ -101,8 +101,10 @@ export function useRollExecutor({
             roller,
             theme: themeRef.current,
           }
-          onLocalResult(result)
+          // Reveal the result only once the dice have animated to it, so the log
+          // doesn't betray the (predetermined) outcome before the throw settles.
           await playRoll(result)
+          onLocalResult(result)
           onSettled?.(result)
         } else if (renderer.isReady) {
           const base = await executeNonDetRoll(request, throwDice)

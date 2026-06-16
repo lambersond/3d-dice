@@ -89,6 +89,18 @@ export const EXAMPLES: ExampleConfig[] = [
     interaction: 'seed',
   },
   {
+    slug: 'custom-actions',
+    label: 'Custom hover actions',
+    category: 'Advanced',
+    description:
+      'A custom hover popover wired straight to the engine: reroll a die, or set it aside to park it in a corner of the table.',
+    deterministic: false,
+    persistent: false,
+    removal: TRANSIENT_LINGER,
+    renderer: { enableDiceSelection: true },
+    interaction: 'custom',
+  },
+  {
     slug: 'vtt',
     label: 'VTT',
     category: 'Advanced',
@@ -105,18 +117,6 @@ export const EXAMPLES: ExampleConfig[] = [
       dieScale: 65,
     },
     interaction: 'vtt',
-  },
-  {
-    slug: 'custom-actions',
-    label: 'Custom hover actions',
-    category: 'Advanced',
-    description:
-      'A custom hover popover with Reroll and Set aside actions, wired straight to the engine.',
-    deterministic: false,
-    persistent: false,
-    removal: TRANSIENT_LINGER,
-    renderer: { enableDiceSelection: true },
-    interaction: 'custom',
   },
 ]
 
