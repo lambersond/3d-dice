@@ -123,6 +123,46 @@ describe('executeNonDetRoll', () => {
     expect(result.total).toBe(4)
   })
 
+  it('re-rolls multiple exploding dice together, one throw per round', async () => {
+    const request: RollRequest = {
+      pools: [{ sides: 6, count: 3 }],
+      modifier: 0,
+      exploding: true,
+    }
+    // base 3d6 -> [6, 4, 6]; round 2d6 -> [6, 2]; round 1d6 -> [3]
+    const { throwDice, calls } = scripted([[6, 4, 6], [6, 2], [3]])
+
+    const result = await executeNonDetRoll(request, throwDice, opts)
+
+    expect(calls).toEqual(['3d6', '2d6', '1d6'])
+    expect(result.pools[0].kept).toEqual([6, 4, 6])
+    expect(result.pools[0].explosions).toEqual([[6, 3], [], [2]])
+    expect(result.total).toBe(6 + 4 + 6 + 6 + 3 + 2)
+  })
+
+  it('batches exploding dice across pools into one round', async () => {
+    const request: RollRequest = {
+      pools: [
+        { sides: 6, count: 1 },
+        { sides: 20, count: 1 },
+      ],
+      modifier: 0,
+      exploding: true,
+    }
+    // base 1d6+1d20 -> [6, 20]; one combined round 1d6+1d20 -> [2, 3]
+    const { throwDice, calls } = scripted([
+      [6, 20],
+      [2, 3],
+    ])
+
+    const result = await executeNonDetRoll(request, throwDice, opts)
+
+    expect(calls).toEqual(['1d6+1d20', '1d6+1d20'])
+    expect(result.pools[0].explosions).toEqual([[2]])
+    expect(result.pools[1].explosions).toEqual([[3]])
+    expect(result.total).toBe(6 + 20 + 2 + 3)
+  })
+
   it('combines a d100 (tens) and d10 (ones) into a percentile', async () => {
     const request: RollRequest = {
       pools: [{ sides: 100, count: 1 }],

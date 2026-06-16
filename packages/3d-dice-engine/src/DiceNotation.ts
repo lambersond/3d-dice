@@ -2,9 +2,8 @@ export class DiceNotation {
   [key: string]: any
 
   constructor(notation: any) {
-    if (typeof notation === 'object') {
-      notation = notation.notation
-    }
+    const input =
+      typeof notation === 'object' ? notation.notation : notation
 
     this.set = []
     this.setkeys = []
@@ -19,32 +18,42 @@ export class DiceNotation {
     this.notation = ''
     this.vectors = []
 
-    if (!notation || notation === '0') {
+    if (!input || input === '0') {
       this.error = true
     }
 
-    this.parseNotation(notation)
+    this.parseNotation(input)
   }
 
   parseNotation(notation: string) {
-    if (notation) {
-      const rage = notation.split('!').length - 1 || 0
-      if (rage > 0) {
-        this.boost = Math.min(Math.max(rage, 0), 3) * 4
-      }
-      notation = notation.split('!').join('') // remove and continue
-      notation = notation.split(' ').join('') // remove spaces
+    const cleaned = this.sanitize(notation)
 
-      // count group starts and ends
-      const groupstarts = notation.split('(').length - 1
-      const groupends = notation.split(')').length - 1
-      if (groupstarts !== groupends) this.error = true
-    }
     const op = this.notation.length > 0 ? '+' : ''
-    this.notation += op + notation
+    this.notation += op + cleaned
 
-    const no = notation.split('@') // 0: dice notations, 1: forced results
-    let notationstring = no[0]
+    const parts = cleaned.split('@') // 0: dice notations, 1: forced results
+    this.parseSets(parts[0])
+    this.parseForcedResults(parts[1])
+  }
+
+  sanitize(notation: string): string {
+    if (!notation) return notation
+
+    const rage = notation.split('!').length - 1 || 0
+    if (rage > 0) {
+      this.boost = Math.min(Math.max(rage, 0), 3) * 4
+    }
+
+    const cleaned = notation.split('!').join('').split(' ').join('')
+
+    const groupstarts = cleaned.split('(').length - 1
+    const groupends = cleaned.split(')').length - 1
+    if (groupstarts !== groupends) this.error = true
+
+    return cleaned
+  }
+
+  parseSets(notationstring: string) {
     const rollregex =
       /(\+|\-|\*|\/|\%|\^|){0,1}()(\d*)([a-z]+\d+|[a-z]+|)(?:\{([a-z]+)(.*?|)\}|)()/i
 
@@ -53,108 +62,123 @@ export class DiceNotation {
     //   3: (\d*)                    number of dice
     //   4: ([a-z]+\d+|[a-z]+|)      the die type
     //   5/6: \{([a-z]+)(.*?|)\}     roll functions, e.g. "{r,2}" = reroll all 2s
-    // predetermined results follow "@" (parsed separately below), e.g. "@4,4,4"
+    // predetermined results follow "@" (parsed separately), e.g. "@4,4,4"
 
-    const resultsregex = /(\b)*(\-\d+|\d+)(\b)*/gi // forced results: '1, 2, 3' or '1 2 3'
-    let res
-
+    let remaining = notationstring
     let runs = 0
     const breaklimit = 30
     let groupLevel = 0
     let groupID = 0
-    while (
-      !this.error &&
-      notationstring.length > 0 &&
-      (res = rollregex.exec(notationstring)) !== null &&
-      runs < breaklimit
-    ) {
-      runs++
 
-      // remove this notation so we can move on next iteration
-      notationstring = notationstring.substring(res[0].length)
+    while (!this.error && remaining.length > 0 && runs < breaklimit) {
+      const res = rollregex.exec(remaining)
+      if (res === null) break
 
-      const operator = res[1]
-      const groupstart = res[2] && res[2].length > 0
-      let amount: any = res[3]
-      let type = res[4]
-      const funcname = res[5] || ''
-      let funcargs: any = res[6] || ''
-      const groupend = res[7] && res[7].length > 0
-      let addset = true
+      runs += 1
+      remaining = remaining.substring(res[0].length)
 
-      // individual groups get a unique id so two separate groups at the same
-      // level don't get combined later
-      if (groupstart) {
-        groupLevel += res[2].length
-      }
+      const next = this.consumeMatch(
+        res,
+        remaining.length === 0,
+        runs,
+        groupLevel,
+        groupID,
+      )
+      groupLevel = next.groupLevel
+      groupID = next.groupID
+    }
+  }
 
-      // arguments come in with a leading comma (','), so split and drop the
-      // first blank entry
-      funcargs = funcargs.split(',')
-      if (!funcargs || funcargs.length < 1) funcargs = '' // sanity
-      funcargs.shift()
+  consumeMatch(
+    res: any,
+    isLast: boolean,
+    runs: number,
+    groupLevel: number,
+    groupID: number,
+  ): { groupLevel: number; groupID: number } {
+    const operator = res[1]
+    const groupstart = res[2] && res[2].length > 0
+    let amount: any = res[3]
+    let type = res[4]
+    const funcname = res[5] || ''
+    let funcargs: any = res[6] || ''
+    const groupend = res[7] && res[7].length > 0
+    let addset = true
 
-      // a lone operator+constant as the whole string (e.g. '+7', '*4', '-2') —
-      // assume a d20 is to be rolled
-      if (runs === 1 && notationstring.length === 0 && !type && operator && amount) {
-        type = 'd20'
-        this.op = operator
-        this.constant = parseInt(amount)
-        amount = 1
+    let level = groupLevel
+    let id = groupID
 
-        // otherwise this is a trailing operator+constant on a multi-set roll
-      } else if (runs > 1 && notationstring.length === 0 && !type) {
-        this.op = operator
-        this.constant = parseInt(amount)
-        addset = false
-      }
-
-      if (addset) {
-        this.addSet(amount, type, groupID, groupLevel, funcname, funcargs, operator)
-      }
-
-      if (groupend) {
-        groupLevel -= res[7].length
-        groupID += res[7].length
-      }
+    if (groupstart) {
+      level += res[2].length
     }
 
-    // forced results
-    if (!this.error && no[1] && (res = no[1].match(resultsregex)) !== null) {
-      this.result.push(...res)
+    funcargs = funcargs.split(',')
+    if (!funcargs || funcargs.length < 1) funcargs = ''
+    funcargs.shift()
+
+    if (runs === 1 && isLast && !type && operator && amount) {
+      type = 'd20'
+      this.op = operator
+      this.constant = Number.parseInt(amount)
+      amount = 1
+
+    } else if (runs > 1 && isLast && !type) {
+      this.op = operator
+      this.constant = Number.parseInt(amount)
+      addset = false
+    }
+
+    if (addset) {
+      this.addSet(amount, type, id, level, funcname, funcargs, operator)
+    }
+
+    if (groupend) {
+      level -= res[7].length
+      id += res[7].length
+    }
+
+    return { groupLevel: level, groupID: id }
+  }
+
+  parseForcedResults(forced: string | undefined) {
+    if (this.error || !forced) return
+    const matched = forced.match(/-?\d+/g)
+    if (matched !== null) {
+      this.result.push(...matched)
     }
   }
 
   stringify(full = true) {
-    let output = ''
+    if (this.set.length < 1) return ''
 
-    if (this.set.length < 1) return output
+    let output = this.set
+      .map((set: any, i: number) => this.formatSet(set, i))
+      .join('')
 
-    for (let i = 0; i < this.set.length; i++) {
-      const set = this.set[i]
-
-      output += i > 0 && set.op ? set.op : ''
-      output += set.num + set.type
-      if (set.func) {
-        output += '{'
-        output += set.func ? set.func : ''
-        output += set.args
-          ? ',' + (Array.isArray(set.args) ? set.args.join(',') : set.args)
-          : ''
-        output += '}'
-      }
+    if (this.constant) {
+      output += this.op + '' + Math.abs(this.constant)
     }
-
-    output += this.constant ? this.op + '' + Math.abs(this.constant) : ''
-
     if (full && this.result && this.result.length > 0) {
       output += '@' + this.result.join(',')
     }
-
     if (this.boost > 1) {
       output += '!'.repeat(this.boost / 4)
     }
     return output
+  }
+
+  formatSet(set: any, index: number): string {
+    const op = index > 0 && set.op ? set.op : ''
+    let output = op + set.num + set.type
+    if (set.func) {
+      output += '{' + set.func + this.formatArgs(set.args) + '}'
+    }
+    return output
+  }
+
+  formatArgs(args: any): string {
+    if (!args) return ''
+    return ',' + (Array.isArray(args) ? args.join(',') : args)
   }
 
   addSet(
@@ -166,9 +190,8 @@ export class DiceNotation {
     funcargs: any = '',
     operator = '+',
   ) {
-    amount = Math.abs(Number.parseInt(amount || 1))
+    const count = Math.abs(Number.parseInt(amount || 1))
 
-    // update a previous set if these match — also combines duplicates
     const setkey = `${operator}${type}${groupID}${groupLevel}${funcname}${funcargs}`
     const update = this.setkeys[setkey] != null
 
@@ -177,8 +200,8 @@ export class DiceNotation {
       setentry = this.set[this.setkeys[setkey] - 1]
     }
 
-    if (amount > 0) {
-      setentry.num = update ? amount + setentry.num : amount
+    if (count > 0) {
+      setentry.num = update ? count + setentry.num : count
       setentry.type = type
       setentry.sid = this.setid
       setentry.gid = groupID
@@ -198,11 +221,8 @@ export class DiceNotation {
   }
 
   static mergeNotation(prevNotation: any, newNotation: any) {
-    // A throw can join a table that carries no roll notation yet — e.g. one that
-    // only holds dice put down with place() (a placed palette). With nothing to
-    // merge into, the new throw's notation stands on its own.
     if (!prevNotation) return newNotation
-    // let our vectors combine
+
     return {
       ...prevNotation,
       constant: prevNotation.constant + newNotation.constant,

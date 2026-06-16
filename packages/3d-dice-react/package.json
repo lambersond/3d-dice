@@ -1,6 +1,6 @@
 {
   "name": "@lambersond/3d-dice-react",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "React hooks and providers for @lambersond/3d-dice-core.",
   "license": "MIT",
   "type": "module",
@@ -23,7 +23,7 @@
     "prepublishOnly": "npm run clean && npm run build"
   },
   "dependencies": {
-    "@lambersond/3d-dice-core": "^0.3.1"
+    "@lambersond/3d-dice-core": "^0.4.0"
   },
   "peerDependencies": {
     "react": ">=18"

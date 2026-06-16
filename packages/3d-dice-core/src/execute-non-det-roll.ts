@@ -22,6 +22,10 @@ type PoolPlan = {
   consume: number
 }
 
+// A die that is still exploding: its `sides` and a reference to the chain array
+// stored on its pool, so appending a value updates the pool in place.
+type PendingDie = { sides: DieSides; chain: number[] }
+
 export async function executeNonDetRoll(
   request: RollRequest,
   throwDice: PhysicalThrow,
@@ -39,24 +43,21 @@ export async function executeNonDetRoll(
   const notation = plans.map(p => p.notation).join('+')
   const landed = notation ? await throwDice(notation) : []
 
-  const pools: DiePool[] = []
-  let cursor = 0
-  for (const plan of plans) {
-    const base = landed.slice(cursor, cursor + plan.consume)
-    cursor += plan.consume
-    pools.push(await buildPool(plan, base, advantage, exploding, throwDice))
-  }
-
-  const diceTotal = pools.reduce(
-    (sum, pool) =>
-      sum +
-      pool.kept.reduce((s, v) => s + v, 0) +
-      (pool.explosions ?? []).reduce(
-        (s, chain) => s + chain.reduce((c, v) => c + v, 0),
-        0,
-      ),
-    0,
+  const { pools, explosionsByPool, pending } = collectPools(
+    plans,
+    landed,
+    exploding,
+    advantage,
   )
+
+  // Every die at its max re-rolls together, one batched throw per round, until
+  // none explode — instead of one die at a time.
+  if (pending.length > 0) await resolveExplosions(pending, throwDice)
+
+  for (const [p, pool] of pools.entries()) {
+    const explosions = explosionsByPool[p]
+    if (explosions.some(chain => chain.length > 0)) pool.explosions = explosions
+  }
 
   return {
     id,
@@ -64,7 +65,48 @@ export async function executeNonDetRoll(
     pools,
     modifier,
     advantage,
-    total: diceTotal + modifier,
+    total: sumDice(pools) + modifier,
+  }
+}
+
+// Slice the base throw into each pool, building its base result and collecting
+// every die at its max into a flat pending list for the explosion rounds.
+function collectPools(
+  plans: PoolPlan[],
+  landed: RolledDie[],
+  exploding: boolean,
+  advantage: Advantage | undefined,
+): { pools: DiePool[]; explosionsByPool: number[][][]; pending: PendingDie[] } {
+  const pools: DiePool[] = []
+  const explosionsByPool: number[][][] = []
+  const pending: PendingDie[] = []
+  let cursor = 0
+
+  for (const plan of plans) {
+    const base = landed.slice(cursor, cursor + plan.consume)
+    cursor += plan.consume
+    const { pool, slots, explosions } = buildPoolBase(plan, base, advantage)
+    // Exploding rolls omit the reroll breakdown so those dice don't rewrite the
+    // logged result; non-exploding rolls keep their per-die slots.
+    if (!exploding) pool.slots = slots
+    pools.push(pool)
+    explosionsByPool.push(explosions)
+    if (exploding) collectPending(plan, pool, explosions, pending)
+  }
+
+  return { pools, explosionsByPool, pending }
+}
+
+function collectPending(
+  plan: PoolPlan,
+  pool: DiePool,
+  explosions: number[][],
+  pending: PendingDie[],
+): void {
+  for (let i = 0; i < plan.count; i += 1) {
+    if (pool.kept[i] === plan.sides) {
+      pending.push({ sides: plan.sides, chain: explosions[i] })
+    }
   }
 }
 
@@ -121,19 +163,17 @@ function slotForDie(
   return { kind: 'plain', parts: [base[i] ?? MISSING_DIE] }
 }
 
-async function buildPool(
+// Build a pool's base result (kept/rolls/slots) without resolving explosions,
+// plus an empty chain per die for any later explosion rounds to fill.
+function buildPoolBase(
   plan: PoolPlan,
   base: RolledDie[],
   advantage: Advantage | undefined,
-  exploding: boolean,
-  throwDice: PhysicalThrow,
-): Promise<DiePool> {
+): { pool: DiePool; slots: DieSlot[]; explosions: number[][] } {
   const { sides, count } = plan
   const slots: DieSlot[] = []
   const rolls: number[][] = []
   const kept: number[] = []
-  const explosions: number[][] = []
-  let anyExplosion = false
 
   for (let i = 0; i < count; i += 1) {
     const slot = slotForDie(plan, advantage, base, i)
@@ -141,45 +181,96 @@ async function buildPool(
     slots.push(slot)
     rolls.push(dieRolls)
     kept.push(keptValue)
-
-    const chain = exploding
-      ? await explodeChain(sides, keptValue, throwDice)
-      : []
-    explosions.push(chain)
-    if (chain.length > 0) anyExplosion = true
   }
 
-  const pool: DiePool = { sides, count, rolls, kept }
-  if (anyExplosion) pool.explosions = explosions
-  // Exploding rerolls are not yet supported, so omit the reroll breakdown to
-  // signal those dice should not rewrite the logged result.
-  if (!exploding) pool.slots = slots
-  return pool
+  const explosions = Array.from({ length: count }, () => [] as number[])
+  return { pool: { sides, count, rolls, kept }, slots, explosions }
 }
 
-async function explodeChain(
-  sides: DieSides,
-  seed: number,
+function sumDice(pools: DiePool[]): number {
+  return pools.reduce((sum, pool) => sum + sumPool(pool), 0)
+}
+
+function sumPool(pool: DiePool): number {
+  const kept = pool.kept.reduce((s, v) => s + v, 0)
+  const exploded = (pool.explosions ?? []).reduce(
+    (s, chain) => s + chain.reduce((c, v) => c + v, 0),
+    0,
+  )
+  return kept + exploded
+}
+
+// Resolve explosions in batched rounds: each round re-rolls every still-exploding
+// die in a single throw, appends the results, and carries forward the dice that
+// hit their max again (capped per die).
+async function resolveExplosions(
+  pending: PendingDie[],
+  throwDice: PhysicalThrow,
+): Promise<void> {
+  let active = pending
+  let rounds = 0
+  while (active.length > 0 && rounds < EXPLOSION_CAP) {
+    rounds += 1
+    const values = await rollBatch(active, throwDice)
+    const next: PendingDie[] = []
+    for (const [i, die] of active.entries()) {
+      const value = values[i]
+      die.chain.push(value)
+      if (value === die.sides && die.chain.length < EXPLOSION_CAP) {
+        next.push(die)
+      }
+    }
+    active = next
+  }
+}
+
+// Throw every active die at once: group by sides into one notation, then map the
+// flat results back to each die's position (combining d100 tens/ones pairs).
+async function rollBatch(
+  active: PendingDie[],
   throwDice: PhysicalThrow,
 ): Promise<number[]> {
-  const chain: number[] = []
-  let last = seed
-  while (last === sides && chain.length < EXPLOSION_CAP) {
-    const next = await rollOne(sides, throwDice)
-    chain.push(next)
-    last = next
+  const groups = new Map<DieSides, number[]>()
+  for (const [i, die] of active.entries()) {
+    const list = groups.get(die.sides) ?? []
+    list.push(i)
+    groups.set(die.sides, list)
   }
-  return chain
-}
 
-async function rollOne(
-  sides: DieSides,
-  throwDice: PhysicalThrow,
-): Promise<number> {
-  if (sides === 100) {
-    const landed = await throwDice('1d100+1d10')
-    return combineD100(landed[0]?.value ?? 0, landed[1]?.value ?? 0)
+  const segments = [...groups.entries()].map(([sides, indices]) => ({
+    sides,
+    indices,
+  }))
+  const notation = segments
+    .map(({ sides, indices }) =>
+      sides === 100
+        ? `${indices.length}d100+${indices.length}d10`
+        : `${indices.length}d${sides}`,
+    )
+    .join('+')
+
+  const landed = await throwDice(notation)
+  const values = Array.from({ length: active.length }, () => 0)
+  let cursor = 0
+  for (const { sides, indices } of segments) {
+    const k = indices.length
+    if (sides === 100) {
+      const tens = landed.slice(cursor, cursor + k)
+      const ones = landed.slice(cursor + k, cursor + 2 * k)
+      cursor += 2 * k
+      for (const [j, activeIndex] of indices.entries()) {
+        values[activeIndex] = combineD100(
+          tens[j]?.value ?? 0,
+          ones[j]?.value ?? 0,
+        )
+      }
+    } else {
+      const block = landed.slice(cursor, cursor + k)
+      cursor += k
+      for (const [j, activeIndex] of indices.entries()) {
+        values[activeIndex] = block[j]?.value ?? 0
+      }
+    }
   }
-  const landed = await throwDice(`1d${sides}`)
-  return landed[0]?.value ?? 0
+  return values
 }

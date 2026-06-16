@@ -2,7 +2,6 @@ import { COLORSETS } from './const/colorsets'
 import { TEXTURELIST } from './const/texturelist'
 
 export class DiceColors {
-  // `colorsets` doubles as a string-keyed cache; members stay loose.
   [key: string]: any
 
   constructor(options: any = {}) {
@@ -47,7 +46,6 @@ export class DiceColors {
     if (typeof options === 'string') setName = options
     if (typeof options === 'object') setName = options.colorset
 
-    // return the cached colorset if it's already been built
     if (Object.hasOwn(this.colorsets, setName)) {
       return this.colorsets[setName]
     }
@@ -58,7 +56,6 @@ export class DiceColors {
     colorset.texture = this.getTexture(texture)
     colorset.texture = await this.ImageLoader(colorset.texture)
 
-    // if a material type was specified then use it
     if (options.material) colorset.texture.material = options.material
 
     this.colorsets[setName] = colorset
@@ -71,7 +68,7 @@ export class DiceColors {
     }
 
     const defaultSet = COLORSETS['white']
-    const colorset = Object.assign({}, defaultSet, options)
+    const colorset = { ...defaultSet, ...options}
     const texture = this.getTexture(colorset.texture)
 
     colorset.texture = await this.ImageLoader(texture)
